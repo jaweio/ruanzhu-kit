@@ -5,6 +5,25 @@ description: 软著工具箱。Use when Codex or Claude needs to analyze a softw
 
 # 软著工具箱
 
+## 每次使用前检查更新（必须执行）
+
+每次用户开始一个使用本 Skill 的新任务时，先执行以下命令，再进入业务流程；同一任务的连续步骤不重复检查。`<skill目录>` 是本次读取的 SKILL.md 所在目录，不是用户业务项目目录。
+
+```bash
+python3 <skill目录>/scripts/check_update.py --json
+```
+
+- 每次调用都会查询 GitHub 最新正式 Release，没有按日缓存；默认网络超时 4 秒。
+- `current` / `local_newer`：直接继续任务，不必打断用户。
+- `update_available`：简短告知本地版本、最新版本及发布链接，然后继续当前任务；只有用户要求更新时才运行 `manage_install.py update` 或更换安装包。更新后重新读取 SKILL.md。
+- `check_failed`：提示“暂时无法检查更新，继续使用本地版本”，继续任务，不反复重试。
+- 检查只读取本地 VERSION 和公开版本元数据，不上传业务项目、申请材料、身份信息，不自动改写安装文件。
+- 宿主禁用网络或命令执行时，说明本次未能检查；不得声称已是最新版本。
+
+此步骤由读取本 Skill 的 agent 执行。它不是操作系统后台服务，也不能强制不遵循 SKILL.md 的客户端自动执行。直接调用单个业务脚本时，请先自行运行上述命令。
+
+---
+
 ## 黄金原则（必须遵守）
 
 1. **一份代码 = 一份软著（默认）**  

@@ -33,9 +33,21 @@ git clone https://github.com/jaweio/ruanzhu-kit.git ~/.claude/skills/ruanzhu-kit
 
 也可下载 Release 中的 `ruanzhu-kit.skill`；它是带 `ruanzhu-kit/` 顶层目录的 ZIP。支持 `.skill` 的客户端可导入；其他客户端解压到其 skills 目录。压缩包安装的升级方式是备份旧目录后导入新版本。
 
-## 更新
+## 每次使用前自动检查更新
 
-Git 安装用户在开始任务前主动运行：
+从 v1.0.1 起，SKILL.md 要求 agent 在每个新任务开始时自动运行 `scripts/check_update.py --json`。每次查询 GitHub 最新正式 Release，发现新版就提示版本和链接；默认超时 4 秒，断网或限流不阻塞任务。Git 安装和 `.skill` 解压安装均可检查。
+
+检查不会自动安装新版或覆盖本地文件。无新版时静默继续，有新版时也可继续完成当前任务。此能力依赖客户端遵循 SKILL.md；直接运行业务脚本不会触发它。v1.0.0 用户需要先升级一次才能获得此步骤。
+
+可手动验证：
+
+```bash
+python3 <skill目录>/scripts/check_update.py --json
+```
+
+## 安装新版
+
+用户选择更新后，Git 安装执行：
 
 ```bash
 python3 ~/.agents/skills/ruanzhu-kit/scripts/manage_install.py update --dest ~/.agents/skills/ruanzhu-kit
