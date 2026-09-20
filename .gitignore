@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+node_modules/
+dist/
+soft-copyright-materials/
+ruanzhu.config.json
+scripts/auto-fill/config.json
+*.bak
+.env
+.env.*
