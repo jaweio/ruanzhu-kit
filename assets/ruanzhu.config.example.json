@@ -1,0 +1,47 @@
+{
+  "project_name": "示例项目",
+  "output_root": "soft-copyright-materials",
+  "copyright_holder": "【待填写】",
+  "development_completed_date": "【待填写】",
+  "first_publication_date": "未发表",
+  "self_open_source": false,
+  "self_aliases": [],
+  "projects": [
+    {
+      "id": "01-示例智能协作平台软件",
+      "name": "示例智能协作平台软件",
+      "short_name": "示例平台",
+      "version": "V1.0",
+      "position": "AI 智能协作平台",
+      "summary": "用于说明该软件的用途、目标用户和核心能力。",
+      "source_pages": 60,
+      "lines_per_page": 90,
+      "modules": [
+        [
+          "模块一",
+          "模块一功能说明。"
+        ],
+        [
+          "模块二",
+          "模块二功能说明。"
+        ]
+      ],
+      "users": [
+        "普通用户",
+        "管理员",
+        "运维人员"
+      ],
+      "source_map": [
+        [
+          "应用入口",
+          "src/main/index.ts"
+        ]
+      ],
+      "source_files": [
+        "src/main/index.ts"
+      ],
+      "redact": true,
+      "scrub_open_source": true
+    }
+  ]
+}

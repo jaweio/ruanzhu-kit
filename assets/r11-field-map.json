@@ -1,0 +1,80 @@
+{
+  "_doc": "R11 申请表字段映射：给通过浏览器插件/computer-use 填表的 agent 用。定位优先用 label 文本，失败再用 fallback。值一律取自 auto-fill/config.json，不得即兴编写。",
+  "url": "https://register.ccopyright.com.cn/r11.html#/application",
+  "stop_rule": "填到「保存至草稿箱」为止；「确认填报」「提交」一类按钮由用户本人点击，agent 不得点击。",
+  "steps": [
+    {
+      "step": 1,
+      "title": "选择办理身份",
+      "wait_for": "选择办理身份",
+      "fields": [
+        {"key": "step1_identity.applicantRole", "label": "办理身份", "type": "choice", "note": "默认「我是申请人」"},
+        {"key": "step1_identity.applicantType", "label": "著作权人类型", "type": "choice", "note": "企业法人 / 自然人 等"},
+        {"key": "step1_identity.developType", "label": "开发方式", "type": "choice", "note": "独立开发 / 合作开发 等"}
+      ],
+      "next": "下一步"
+    },
+    {
+      "step": 2,
+      "title": "软件申请信息",
+      "wait_for": "软件申请信息",
+      "fields": [
+        {"key": "step2_basic.softwareName", "label": "软件全称", "type": "text", "limit": 60, "verify": true},
+        {"key": "step2_basic.shortName", "label": "软件简称", "type": "text", "limit": 15},
+        {"key": "step2_basic.version", "label": "版本号", "type": "text", "limit": 20, "verify": true},
+        {"key": "step2_basic.category", "label": "软件分类", "type": "select"},
+        {"key": "step2_basic.completionDate", "label": "开发完成日期", "type": "date", "verify": true,
+         "note": "填完按 Esc 关掉日期面板"},
+        {"key": "step2_basic.published", "label": "发表状态", "type": "choice",
+         "map": {"false": "未发表", "true": "已发表"}, "verify": true},
+        {"key": "step2_basic.copyrightHolder", "label": "著作权人", "type": "readonly",
+         "note": "通常由登录账户带入；只核对是否与配置一致，不一致就停下问用户"}
+      ],
+      "next": "下一步"
+    },
+    {
+      "step": 3,
+      "title": "软件开发信息",
+      "wait_for": "软件开发信息",
+      "fields": [
+        {"key": "step3_dev.devHardware", "label": "开发硬件环境", "type": "textarea", "limit": 100},
+        {"key": "step3_dev.runHardware", "label": "运行硬件环境", "type": "textarea", "limit": 100},
+        {"key": "step3_dev.devOS", "label": "开发操作系统", "type": "textarea", "limit": 50},
+        {"key": "step3_dev.devTools", "label": "开发工具", "type": "textarea", "limit": 50,
+         "note": "写 IDE/编译器/构建工具，不写 React、Vue 这类技术栈名"},
+        {"key": "step3_dev.runOS", "label": "运行平台", "type": "textarea", "limit": 50},
+        {"key": "step3_dev.runSupport", "label": "运行支撑环境", "type": "textarea", "limit": 50},
+        {"key": "step3_dev.language", "label": "编程语言", "type": "choice"},
+        {"key": "step3_dev.languageOther", "label": "其他编程语言", "type": "textarea", "limit": 50},
+        {"key": "step3_dev.sourceLines", "label": "源程序量", "type": "number", "verify": true,
+         "note": "全项目源码行数，不是 60 页取材行数"}
+      ],
+      "next": "下一步"
+    },
+    {
+      "step": 4,
+      "title": "软件功能与特点",
+      "wait_for": "软件功能与特点",
+      "fields": [
+        {"key": "step4_features.devPurpose", "label": "开发目的", "type": "textarea", "limit": 50},
+        {"key": "step4_features.targetIndustry", "label": "面向领域", "type": "textarea", "limit": 50},
+        {"key": "step4_features.mainFunction", "label": "软件主要功能", "type": "textarea",
+         "min": 500, "limit": 1300, "verify": true,
+         "note": "长文本，粘贴后务必回读确认没有被截断"},
+        {"key": "step4_features.techFeatureTag", "label": "技术特点标签", "type": "choice"},
+        {"key": "step4_features.techFeatureText", "label": "技术特点", "type": "textarea", "limit": 100},
+        {"key": "step4_features.programPdf", "label": "程序鉴别材料", "type": "file", "verify": true},
+        {"key": "step4_features.docPdf", "label": "文档鉴别材料", "type": "file", "verify": true}
+      ],
+      "next": "下一步"
+    },
+    {
+      "step": 5,
+      "title": "确认信息",
+      "wait_for": "确认信息",
+      "fields": [],
+      "actions": ["逐项回读确认页的字段，与 config.json 比对", "点击「保存至草稿箱」", "等待保存完成提示"],
+      "forbidden": ["确认填报", "提交申请", "正式提交"]
+    }
+  ]
+}
