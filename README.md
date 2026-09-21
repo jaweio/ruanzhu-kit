@@ -66,6 +66,10 @@ Claude 用户将路径换为 `~/.claude/skills/ruanzhu-kit`。更新工具检查
 
 也可手动执行 `git -C <安装目录> pull --ff-only`。版本号位于 `VERSION`，每次发布的变化记录在 `CHANGELOG.md`。需固定版本时可在独立克隆中 `git checkout v1.0.0`，恢复 `main` 后才能使用更新工具。
 
+### 自动发布
+
+向 GitHub 推送 `v*` 格式的版本标签后，`.github/workflows/release.yml` 会自动创建对应的 GitHub Release。版本提交、标签和 Release 建议按以下顺序完成：更新 `VERSION` 与 `CHANGELOG.md`，提交后创建并推送标签，例如 `git tag -a v1.0.3 -m 'Release v1.0.3' && git push origin main --follow-tags`。
+
 ## 依赖
 
 基础分析和文本处理使用 Python 标准库；生成源码 DOCX 需要：
