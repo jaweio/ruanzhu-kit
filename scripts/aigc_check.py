@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from aigc_rules import (ABSTRACT_NOUNS, BOLD_LEAD, CONDITION, FAQ_Q, EXPERIENCE, OPERATION_VERBS, PAREN, PLACEHOLDER,  # noqa: E402
                         TEMPLATE_OPENERS, blacklist_hits, cv, fact_hits, item_shape, load_blocks,
-                        marketing_hits, sentences)
+                        common_term_hits, common_term_warnings, marketing_hits, sentences)
 
 ENUM = re.compile(r"(?:[\u4e00-\u9fa5]{2,6}、){4,}[\u4e00-\u9fa5]{2,6}")
 
@@ -32,7 +32,7 @@ def is_operation(sentence):
     return bool(re.search(OPERATION_VERBS, sentence) or re.search(CONDITION, sentence))
 
 LOW, HIGH = 35, 55
-SKIP_NAMES = {"源码材料清单.md", "AIGC检测报告.md", "AIGC改写任务单.md", "源程序提取报告.md", "待补充信息清单.md"}
+SKIP_NAMES = {"源码材料清单.md", "截图证据计划.md", "AIGC检测报告.md", "AIGC改写任务单.md", "源程序提取报告.md", "待补充信息清单.md"}
 
 
 def grade(score):
@@ -179,6 +179,7 @@ WEIGHT = {"prose": 1.0, "list": 1.0, "table": 1.0, "code": 0.3}
 
 def analyze(path):
     blocks = load_blocks(path)
+    heading_blocks = [b for b in blocks if b.kind == "heading"]
     scored = []
     for b in blocks:
         if b.kind == "heading" or b.chapter == "目录":
@@ -197,6 +198,9 @@ def analyze(path):
     for row in scored:
         chapters[row[0].chapter].append(row)
     full = "\n".join(b.text for b, _, _ in scored)
+    heading_text = "\n".join(f"# {b.text}" for b in heading_blocks)
+    heading_blacklist = blacklist_hits(heading_text)
+    frequency = common_term_warnings(full)
     prose_chars = sum(len(b.text) for b, _, _ in scored if b.kind in ("prose", "list"))
     total_chars = sum(len(b.text) for b, _, _ in scored) or 1
     all_sents = [x for b, _, _ in scored if b.kind in ("prose", "list") for x in (b.items or sentences(b.text))]
@@ -206,11 +210,15 @@ def analyze(path):
         if b.kind != "code":
             dist["human" if r < LOW else "suspect" if r < HIGH else "ai"] += len(b.text)
     dsum = sum(dist.values()) or 1
+    base_score = weighted(scored)
+    # 标题模板和全文高频词是跨段落风险，单个段落评分无法覆盖；仅作小幅加权，避免把专业术语直接判成 AI。
+    overall_score = min(100.0, base_score + min(12, len(heading_blacklist) * 8)
+                        + min(8, len(frequency) * 2))
     return {
         "file": str(path),
-        "score": weighted(scored),
+        "score": round(overall_score, 1),
         "distribution": {k: round(v * 100 / dsum, 1) for k, v in dist.items()},
-        "grade": grade(weighted(scored)),
+        "grade": grade(overall_score),
         "stats": {
             "blocks": len(scored),
             "chars": total_chars,
@@ -218,7 +226,11 @@ def analyze(path):
             "facts_per_1k": round(fact_hits(full) * 1000 / total_chars, 1),
             "experience_marks": sum(len(re.findall(p, full)) for p in EXPERIENCE),
             "op_ratio": round(op_ratio, 2),
+            "suspect_or_ai_ratio": round((dist["suspect"] + dist["ai"]) / dsum, 3),
             "blacklist_hits": len(blacklist_hits(full)),
+            "heading_blacklist_hits": len(heading_blacklist),
+            "common_terms": common_term_hits(full),
+            "frequency_warnings": frequency,
             "placeholders": len(PLACEHOLDER.findall(full)),
         },
         "chapters": [{"chapter": c, "score": weighted(rows), "blocks": len(rows)} for c, rows in chapters.items()],
@@ -253,12 +265,14 @@ def render(results, top):
            f"> 分档：<{LOW} 低 ｜ {LOW}-{HIGH} 中 ｜ ≥{HIGH} 高。目标：每份文件 < {LOW}，且无占位符残留。", "",
            "> 人工/疑似/AI 为按块分类后的字数占比（与朱雀报告同口径：占比不是“作者用 AI 的概率”）。", "",
            "## 总览", "",
-           "| 文件 | 得分 | 档位 | 人工% | 疑似% | AI% | 操作句占比 | 事实/千字 | 黑名单 | 占位符 |",
-           "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+           "| 文件 | 得分 | 档位 | 人工% | 疑似% | AI% | 疑似+AI | 操作句占比 | 事实/千字 | 黑名单 | 高频词 | 占位符 |",
+           "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for r in results:
         s, d = r["stats"], r["distribution"]
+        freq = "、".join(f"{item['term']}{item['count']}次" for item in s.get("frequency_warnings", [])) or "—"
         out.append(f"| {r['file']} | {r['score']} | {r['grade']} | {d['human']} | {d['suspect']} | {d['ai']} "
-                   f"| {s['op_ratio']:.0%} | {s['facts_per_1k']} | {s['blacklist_hits']} | {s['placeholders']} |")
+                   f"| {s['suspect_or_ai_ratio']:.0%} | {s['op_ratio']:.0%} | {s['facts_per_1k']} | "
+                   f"{s['blacklist_hits'] + s.get('heading_blacklist_hits', 0)} | {freq} | {s['placeholders']} |")
     for r in results:
         out += ["", f"## {r['file']}", "", "### 分章节", "", "| 章节 | 得分 | 块数 |", "| --- | --- | --- |"]
         out += [f"| {c['chapter']} | {c['score']} | {c['blocks']} |" for c in r["chapters"]]
@@ -268,6 +282,12 @@ def render(results, top):
                          "功能描述后补“（二）操作步骤”：进入哪里 → 单击“X” → 失败时提示什么、怎么处理")
         if r["stats"]["facts_per_1k"] < 8:
             hints.append(f"事实密度 {r['stats']['facts_per_1k']}/千字偏低（建议 ≥8；它保证真实性，但单靠它不降分）")
+        if r["stats"].get("frequency_warnings"):
+            terms = "、".join(f"{item['term']} {item['count']} 次（{item['per_1k']}/千字）"
+                              for item in r["stats"]["frequency_warnings"])
+            hints.append(f"高频词：{terms} → 合并重复主语，改用真实页面、字段、接口名；不要只做同义词替换")
+        if r["stats"].get("heading_blacklist_hits"):
+            hints.append("发现通用优势/核心价值类章节标题 → 删除模板化总结，换成真实操作记录或源码证据")
         if hints:
             out += ["", "### 全文提示", ""] + [f"- {h}" for h in hints]
         issues = r["issues"][:top]
@@ -288,6 +308,8 @@ def main():
     ap.add_argument("--top", type=int, default=20, help="每个文件列出多少个高风险块")
     ap.add_argument("--fail-above", type=float, help="任一文件得分超过该值或残留占位符时退出码为 1")
     ap.add_argument("--max-ai-ratio", type=float, help="任一文件 AI 档字数占比（%%）超过该值时退出码为 1")
+    ap.add_argument("--max-suspect-ratio", type=float,
+                    help="任一文件疑似 AI + AI 档字数占比超过该值时退出码为 1（本地结构指标，不等同朱雀）")
     args = ap.parse_args()
 
     files = collect(args.targets)
@@ -311,6 +333,8 @@ def main():
         failed |= any(r["score"] > args.fail_above or r["stats"]["placeholders"] for r in results)
     if args.max_ai_ratio is not None:
         failed |= any(r["distribution"]["ai"] > args.max_ai_ratio for r in results)
+    if args.max_suspect_ratio is not None:
+        failed |= any(r["stats"]["suspect_or_ai_ratio"] > args.max_suspect_ratio for r in results)
     if failed:
         sys.exit(1)
 

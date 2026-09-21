@@ -29,6 +29,7 @@ from aigc_check import LOW, analyze, collect  # noqa: E402
 
 # (正则, 替换, 说明) —— 只放“删了/换了也不影响事实与语法”的规则
 SAFE_RULES = [
+    (r"可以(?=[，。；])", "可", "可以→可（仅减少口头化重复，不改变事实）"),
     (r"包括但不限于", "包括", "包括但不限于→包括"),
     (r"值得(?:注意|关注)的是[，,]?", "注意，", "值得注意的是→注意"),
     (r"值得一提的是[，,]?", "", "删“值得一提的是”"),
@@ -51,6 +52,63 @@ LINE_RULES = [
     (r"^(\s*(?:[-*+]|\d+[.)、])\s+)\*\*([^*\n]{1,24})\*\*\s*([:：])", r"\1\2\3", "去掉列表粗体引导词的加粗"),
 ]
 
+# 旧版本生成器写入的整段通用模板。只在正文同时出现这些固定标志时裁剪，
+# 不按章节编号盲删用户自己写的内容；新版 generate_docs.py 已不会再生成这些段落。
+TEMPLATE_SECTION_RE = re.compile(r"(?ms)^(#{2,3})\s+([^\n]+)\n.*?(?=^#{2,3}\s+|\Z)")
+
+
+def prune_template_sections(text):
+    hits = {}
+
+    def replace(match):
+        title = re.sub(r"^\d+(?:\.\d+)*\s*", "", match.group(2)).strip()
+        body = match.group(0)
+        remove = False
+        if title == "设计原则" and all(x in body for x in ("易用性", "模块化", "可扩展性", "安全性", "可追溯")):
+            remove = True
+        elif title == "适用场景" and all(x in body for x in ("日常业务处理和任务管理", "企业或团队内部工具化应用")):
+            remove = True
+        elif title == "分层架构" and all(x in body for x in ("表现层", "业务层", "服务层", "数据层")):
+            remove = True
+        elif title == "硬件环境" and all(x in body for x in ("CPU", "双核及以上", "内存", "存储")):
+            remove = True
+        elif title == "权限要求" and all(x in body for x in ("文件访问", "网络访问", "日志访问")):
+            remove = True
+        elif title == "安装前准备" and "确认操作系统和运行环境满足要求" in body:
+            remove = True
+        elif title == "配置概述" and "软件配置包括基础参数、业务参数、运行参数、安全参数和扩展参数" in body:
+            remove = True
+        elif title == "快速上手" and all(x in body for x in ("启动软件", "完成基础配置", "进入核心功能页面")):
+            remove = True
+        elif title == "日志与监控" and "软件应记录启动、配置、核心操作、异常和关键状态变更日志" in body:
+            remove = True
+        elif title == "数据与缓存管理" and "定期检查数据文件、缓存目录、日志目录和临时文件" in body:
+            remove = True
+        elif title == "安全策略" and "对敏感配置、账号密钥、用户数据和关键操作进行权限控制" in body:
+            remove = True
+        elif title in {"软件无法启动怎么办？", "配置不生效怎么办？", "功能执行失败怎么办？"}:
+            remove = True
+        elif title == "测试用例" and all(x in body for x in ("TC-001", "TC-002", "TC-003")):
+            remove = True
+        if remove:
+            hits[f"删除旧版通用模板：{title}"] = hits.get(f"删除旧版通用模板：{title}", 0) + 1
+            return ""
+        return body
+
+    # 版本信息中只有申请表字段属于错误位置，源码范围仍保留。
+    def clean_version(match):
+        title = re.sub(r"^\d+(?:\.\d+)*\s*", "", match.group(2)).strip()
+        body = match.group(0)
+        if title != "版本信息" or not all(x in body for x in ("著作权人", "开发完成日期", "首次发表日期")):
+            return body
+        lines = [line for line in body.splitlines()
+                 if not re.search(r"著作权人|开发完成日期|首次发表日期", line)]
+        hits["删除说明书中的申请人字段：著作权人/日期"] = 1
+        return "\n".join(lines) + "\n"
+
+    text = TEMPLATE_SECTION_RE.sub(clean_version, text)
+    return TEMPLATE_SECTION_RE.sub(replace, text), hits
+
 # 任务单里的改写配方：原因关键词 → 怎么改 + 示范。示范来自朱雀实测判人工的写法（references/writing-style.md 第八节）
 RECIPES = [
     ("括号补注", "括号只留必须的（单位、缩写全称）；类名/行数/错误码写进句子主干或挪进表格。",
@@ -70,6 +128,9 @@ RECIPES = [
      "✓ 1. 在左侧菜单选择“大屏预览 > 投屏工具”。\n"
      "   2. 首次使用时按浏览器提示允许窗口管理权限；不支持时页面显示兼容性提示，改用较新版本的 Chrome 或 Edge。"),
     ("无事实锚点", "回源码/界面找一个真实值：控件文字、字段长度限制、可选项、版本号、错误码。查不到就删掉这句。", ""),
+    ("通用优势章节", "删除“系统优势/技术优势/功能优势/应用优势/核心价值”等模板标题，改成真实操作、接口返回或日志结果；不要只换同义词。", ""),
+    ("整套业务闭环", "删掉结论式评价，按真实入口 → 处理 → 返回结果 → 失败分支写，缺哪一步就不写哪一步。", ""),
+    ("高频词", "先合并重复主语和重复章节，再用真实页面、字段、接口名替代泛称；不要机械地把“系统”全部替换成“平台”。", ""),
     ("长顿号枚举", "只留真正实现了的 2–3 项；可选项枚举（如 3/5/10/15 秒）可以保留。", ""),
     ("句长", "拆一个长句，或合并两个短句，让相邻句子长短明显不同。", ""),
     ("列表", "条目开头换动词或换主语；有的条目带条件分支，有的只写一句。", ""),
@@ -96,6 +157,9 @@ def clean_text(text):
     hits, parts, last = {}, [], 0
 
     def apply(seg):
+        seg, template_hits = prune_template_sections(seg)
+        for note, n in template_hits.items():
+            hits[note] = hits.get(note, 0) + n
         for pat, rep, note in SAFE_RULES:
             seg, n = re.subn(pat, rep, seg)
             if n:

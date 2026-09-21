@@ -8,7 +8,16 @@
 
 - 按真实源码整理模块、界面文字和操作素材，支持多份材料的取材隔离。
 - 生成说明书 Markdown/PDF、源码 DOCX/PDF，整理截图和章节目录。
+- 源程序鉴别材料默认裁剪普通注释、Go/Python/JS 等导入块、C/C++ include 和连续空行，只保留包声明与核心实现；原项目代码不改写，可用 `--keep-comments` / `--keep-imports` 恢复。
+- 提供本地源程序材料可视化预览：查看行数变化、裁剪统计、第三方跳过情况和脱敏代码样本。
+- 结合项目源码生成演示数据方案，供浏览器/Computer Use 在本地运行项目中创建真实业务语义的数据后截图。
+- 可选分析/启动本地前后端会话，按显式 API 适配器预览、写入并回滚演示数据；默认不启动、不写库。
+- 支持软著专用分支/独立工作树和源码重叠检查，主分支不自动修改、不自动推送。
+- 支持截图清单完整性校验，提前发现缺图、空图和未覆盖模块。
+- 后端项目自动从源码提取接口方法/路径/文件/行号，并生成真实证据计划；校验 Knife4j/OpenAPI、成功响应、4xx 错误响应和运行日志截图，禁止用模板页替代。
 - 本地检查占位符、文本长度、敏感信息、来源线索和模板化文风。
+- AIGC 文风报告额外统计“可以/系统/模块”等高频词，识别“系统优势/核心价值”等通用章节和“整套业务闭环是完整的”等生成式表达。
+- 可选朱雀风格联网检测：Key 只绑定到本机 macOS Keychain，未绑定时提示用户前往腾讯 EdgeOne Makers 自行生成。
 - 汇总申请字段、生成填表操作计划，支持浏览器扩展和 Computer Use。
 - 上传说明书与源程序 PDF，回读核对后保存草稿。正式提交由用户完成。
 - 输出材料进度看板；提供版本化发布包和 Git 更新工具。
@@ -87,16 +96,58 @@ python3 <skill目录>/scripts/create_config.py --project-name "我的项目" --o
 python3 <skill目录>/scripts/manual_spec.py --repo . --out soft-copyright-materials/说明书素材.json
 ```
 
-补全真实资料和素材后，按 [SKILL.md](SKILL.md) 运行材料生成、检查、PDF 渲染和填表流程。项目材料应保存在业务项目目录，不要提交到本工具仓库。
+补全真实资料和素材后，按 [SKILL.md](SKILL.md) 运行材料生成、检查、PDF 渲染和填表流程。`manual_spec.py`、`generate_docs.py`、版权/AIGC 检查和源码材料提取不要求先启动项目；只有截图、页面核验和页面数据创建才需要运行前后端。项目材料应保存在业务项目目录，不要提交到本工具仓库。
+
+默认说明书使用 10 章基础结构；复杂项目可在项目配置的 `extra_chapters` 中添加真实存在的章节，简单项目不需要凑足固定章数。
+
+### 截图前准备项目数据
+
+```bash
+python3 <skill目录>/scripts/prepare_demo_data.py \
+  --repo <项目源码目录> \
+  --project-name "软件名称" \
+  --spec <材料目录>/说明书素材.json \
+  --out <材料目录>/演示数据方案.json
+```
+
+该命令只生成方案，不直接写库。后续由 agent 在本地运行的项目中，通过浏览器插件或 Computer Use 按页面流程创建记录；不使用“测试”“示例”“demo”等占位名称，也不写入生产数据库。
+
+需要启动项目时可先执行 `scripts/project_runtime.py inspect`；只有截图/页面核验阶段才使用带 `--allow-run` 的 `start`。接口没有页面入口时，可复制 `assets/demo-data-api.example.json`，先执行 `apply_demo_data.py apply` 预览，再显式添加 `--allow-write`，截图完成后用回滚记录撤销本地数据。材料生成、说明书和源程序处理仍不要求项目运行。
+
+多份软著需要代码级隔离时，使用 `scripts/softcopyright_branch.py create` 创建 `copyright/<名称>` 独立工作树，并用 `check-overlap --repo <项目目录>` 检查 `source_files` 是否重复；脚本不自动 push。
+
+源程序提取前可先生成可视化预览：
+
+```bash
+python3 <skill目录>/scripts/source_preview.py \
+  --config <材料目录>/ruanzhu.config.json \
+  --repo <项目目录> \
+  --out <材料目录>/源程序材料预览.html
+```
+
+用浏览器打开 HTML 即可查看裁剪前后统计和逐文件脱敏样本；预览不上传源码，也不修改项目文件。
+
+截图整理后可执行 `scripts/screenshots.py --check --fail-on-missing`，确认清单中的图片、说明书模块和后端真实证据已全部覆盖；后端截图建议命名为 `api-docs.png`、`api-success.png`、`api-error.png`、`runtime-log.png`。
+
+### 可选朱雀检测
+
+```bash
+python3 <skill目录>/scripts/zhusque_check.py bind --open
+python3 <skill目录>/scripts/zhusque_check.py finalize <材料目录> \
+  --allow-upload --report <材料目录>/朱雀检测报告.md
+```
+
+首次运行 `generate_docs.py` 会自动执行离线 AIGC 机械清理并生成任务单；正文确认后再运行一次 `finalize` 做全量朱雀 API 检测。第一次绑定会跳转到[腾讯 EdgeOne Makers API Key 页面](https://console.cloud.tencent.com/edgeone/makers?tab=models&subTab=apikey)。Key 不写入仓库、项目配置或检测报告；联网检测前必须明确确认材料可以上传。相同文本块会使用本机缓存，强制重测可加 `--no-cache`。
 
 ## 当前版本的边界
 
-v1.0.0 基于 2026-09-20 的本地版本发布，只增加开源分发支持、移除本机工具路径并修复 `--check` 参数解析。保留既有业务脚本；以下旧规则和能力限制需要人工核实：
+v1.0.1 基于 2026-09-20 的本地版本发布；当前工作区还包含未发布的材料生成、运行会话、演示数据回滚、截图校验和软著工作树增强。以下规则和能力限制仍需人工核实：
 
 - 旧文档存在随机选择日期、统一填写未发表的表述；不能作为实际申报依据。日期、发表状态和权利范围应来自真实资料，未知时留待用户补充。
 - 来源检查是规则扫描，不能证明代码权属；不能因缺少声明便认定为自研，也不能用清理功能掩盖来源或删除必须保留的许可声明。
 - AIGC 分数只反映本地规则中的文风特征，不能识别生成模型，也不保证与外部检测一致。所附样本标签是历史校准记录，不代表本次发布重新验证的准确率。
-- 默认 PDF 仍采用 Letter、固定十章目录、较宽行距和右下角页码；未自动实现底部居中页码及所有小节跳转。
+- 可在终检时使用 `aigc_check.py --max-suspect-ratio 0.20` 限制本地“疑似+AI”结构占比；这只是送朱雀前的本地闸门，不替代朱雀结果。
+- 默认 PDF 仍采用 Letter、十章基础目录、较宽行距和右下角页码；复杂项目可通过 `extra_chapters` 扩展章节，未自动实现所有小节跳转。
 - 脚本与说明文件的输出命名可能不同，例如 PDF 渲染实际生成 `软件文档.pdf`；填写时应以实际生成并核对过的文件为准。
 - 自动化无法替代对材料事实的核对；登录、验证码和最终提交由用户操作。
 

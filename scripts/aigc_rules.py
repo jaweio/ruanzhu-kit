@@ -19,6 +19,9 @@ BLACKLIST = [
     ("显著提升", r"显著(?:提升|提高|改善|降低)", "给出实测数字，或直接删除"),
     ("形成一套", r"形成(?:一套|了一套)[^。；\n]{0,24}", "删除，直接描述做法"),
     ("构建闭环", r"(?:构建|形成|实现|打造)[^。；\n]{0,12}?闭环", "写清从哪一步回到哪一步"),
+    ("整套业务闭环", r"整套(?:业务|流程)?闭环(?:是)?(?:完整|闭合)|完整的(?:业务|流程)?闭环", "删除结论式评价，改成入口、处理、结果和失败分支"),
+    ("通用优势章节", r"(?m)^\s*#{1,6}\s*(?:系统|技术|功能|应用)优势\s*$", "删除通用优势章节，换成项目实际操作或源码证据"),
+    ("核心价值章节", r"(?m)^\s*#{1,6}\s*核心价值\s*$", "删除通用价值总结，改成真实使用结果"),
     ("包括但不限于", r"包括但不限于", "改为“包括”，并列全"),
     ("值得注意的是", r"值得(?:注意|一提|关注)的是", "改为“注意：”或直接陈述"),
     ("综上所述", r"综上所述|总而言之|总的来说", "删除总结句"),
@@ -52,6 +55,26 @@ CONDITION = r"(?:失败|错误|不存在|超时|为空|不足|不一致|未通�
 
 
 MARKETING = ["强大", "完善", "丰富", "全面", "高效", "优秀", "极致", "卓越", "领先", "先进", "智能化", "便捷", "灵活"]
+
+# 只作风险提示，不把软件名称或专业术语直接判为 AI。阈值按每千字统计。
+COMMON_TERM_LIMITS = {"可以": 1.5, "系统": 2.5, "模块": 2.0}
+COMMON_TERM_ABS_LIMITS = {"可以": 30, "系统": 30, "模块": 20}
+
+
+def common_term_hits(text):
+    return {term: len(re.findall(re.escape(term), text)) for term in COMMON_TERM_LIMITS}
+
+
+def common_term_warnings(text):
+    size = max(len(text), 1)
+    counts = common_term_hits(text)
+    out = []
+    for term, count in counts.items():
+        rate = count * 1000 / size
+        if (count >= 8 and rate > COMMON_TERM_LIMITS[term]) or count >= COMMON_TERM_ABS_LIMITS[term]:
+            out.append({"term": term, "count": count, "per_1k": round(rate, 1),
+                        "limit": COMMON_TERM_LIMITS[term]})
+    return out
 
 TEMPLATE_OPENERS = [
     r"^本(?:软件|系统|模块|平台)(?:采用|基于|主要|通过|支持|具备)",

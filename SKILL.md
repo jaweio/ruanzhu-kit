@@ -29,7 +29,7 @@ python3 <skill目录>/scripts/check_update.py --json
 1. **一份代码 = 一份软著（默认）**  
    除非用户明确要求多份，否则一个代码库只产出一份软著材料。
 
-2. **多份软著时，三重隔离缺一不可**  
+2. **多份软著时，三重隔离缺一不可**
    - 功能不重叠：每份软著覆盖不同业务域，核心功能描述不能互相包含  
    - 源码不重复：每个源文件只能归属一份软著，不得跨软著共享取材  
    - 说明书不相同：每份说明书的功能模块章节描述不同功能，内容不得复制粘贴
@@ -50,7 +50,7 @@ python3 <skill目录>/scripts/check_update.py --json
 Step 1  分析项目    →  读取代码结构 + instructions 设计文档 + manual_spec.py 抽说明书素材
 Step 2  拆分决策    →  确认数量、名称、功能边界、源码分区（与用户确认）
 Step 3  生成配置    →  create_config.py  →  ruanzhu.config.json
-Step 4  生成材料    →  截图整理 screenshots.py → generate_docs.py（按素材生成）+ generate_source_docx.py
+Step 4  生成材料    →  截图/数据为可选运行阶段；generate_docs.py（按源码/素材生成 + 自动本地 AIGC 初稿处理）+ generate_source_docx.py
 Step 5  版权清除    →  预检 → 提取时跳过第三方、清除自有开源痕迹 → oss_scrub.py 清说明书 → 闸门（材料零开源痕迹）
 Step 6  AIGC 去痕  →  aigc_check.py 检测 → aigc_rewrite.py 清理 + 任务单 → 改写 → 复测 < 35
 Step 7  转 PDF     →  render_pdfs.py  →  说明书.pdf + 源程序鉴别材料-60页.pdf（再跑一次 Step 5/6 终检）
@@ -86,6 +86,8 @@ python3 scripts/manual_spec.py --repo <项目目录> \
 
 产出 `说明书素材.json` 和 `说明书素材预览.md`，每个页面含：模块名（取自界面标题文字）、进入位置（路由/目录）、
 界面控件文字、取值约束、提示语、错误码、源码文件与行数；同时统计全项目源码行数（申请表“源程序量”用它）。
+
+如果扫描到后端接口，素材 JSON 还会给出 `backend`、`apis` 和 `evidence_plan`。接口路径、方法、文件和行号只从源码抽取；抽不到的事实不补写。后端说明书的证据计划默认包含三类必需真实材料：成功响应、参数校验/4xx 错误响应、启动或业务日志；只有检测到项目实际启用 Knife4j/OpenAPI 时，调试页才会标为必需。
 
 **必须先与用户确认预览表**：模块名和进入位置是否与真实界面一致，哪些页面不该写进说明书，
 再补 `purpose`（这个界面解决什么）、`steps`（操作顺序）、`scope_note`（不负责的范围）三个字段。
@@ -157,6 +159,22 @@ instructions/
 规则 5：各份软著取材行数应尽量不同（建议相差 ≥ 200 行，避免高度相似）
 ```
 
+多份材料需要代码级调整时，先创建独立软著分支和工作树，主分支保持不动；
+脚本不会自动推送远程，也不会自动覆盖已有目录：
+
+```bash
+python3 scripts/softcopyright_branch.py create --repo <项目目录> \
+  --name ai-collab-backend --base main
+python3 scripts/softcopyright_branch.py create --repo <项目目录> \
+  --name ai-collab-backend --base main --apply
+python3 scripts/softcopyright_branch.py check-overlap \
+  --config soft-copyright-materials/ruanzhu.config.json --repo <项目目录> --fail-on-overlap
+```
+
+第一条只预览，第二条才创建 `copyright/<名称>` 分支及仓库外独立工作树。
+`check-overlap` 用于提前发现多份软著共用同一源码文件或配置中列出的文件不存在，
+不能替代人工确认功能边界，也不会通过改名掩盖真实来源。
+
 ### 2.4 确认清单（与用户确认后再继续）
 
 生成材料前，向用户展示并确认：
@@ -193,13 +211,17 @@ python3 scripts/create_config.py --project-name "MyProject" \
 | `projects[].name` | 软件全称（与其核心功能强相关） |
 | `projects[].source_files` | 该软著专属源文件列表（不与其他软著共享） |
 | `projects[].modules` | 功能模块 `[["模块名", "说明"]]`（只写本软著的功能） |
+| `projects[].extra_chapters` | 复杂项目的扩展章节；默认空数组，按实际功能增加 |
 
 ---
 
 ## Step 4 — 生成材料
 
+`manual_spec.py`、`generate_docs.py`、版权检查、AIGC 检查、源码材料提取和 PDF 生成均可在**不启动前端/后端项目**的情况下完成，输入是源码、配置和已有素材。只有浏览器/模拟器截图、页面实际操作核验、准备页面演示数据和运行时错误验证才需要启动项目。
+
 ```bash
-# 截图：Web 项目先自动拍，再整理编号（非 Web 项目跳过 capture.py，人工截图放进 用户截图/）
+# 可选：需要真实界面截图时才启动项目；不需要截图可直接从 generate_docs.py 开始
+# Web 项目先自动拍，再整理编号（非 Web 项目跳过 capture.py，人工截图放进 用户截图/）
 python3 scripts/capture.py --base-url http://localhost:5173 \
   --spec soft-copyright-materials/说明书素材.json \
   --out soft-copyright-materials/01-XXX软件/用户截图
@@ -215,9 +237,32 @@ python3 scripts/copyright_check.py --config soft-copyright-materials/ruanzhu.con
 
 python3 scripts/generate_source_docx.py \
   --config soft-copyright-materials/ruanzhu.config.json --repo .
+
+# 先预览裁剪效果（不会生成 DOCX，不会改源代码）
+python3 scripts/source_preview.py \
+  --config soft-copyright-materials/ruanzhu.config.json --repo . \
+  --out soft-copyright-materials/源程序材料预览.html
+
+# 生成 DOCX 的同时输出预览
+python3 scripts/generate_source_docx.py \
+  --config soft-copyright-materials/ruanzhu.config.json --repo . --preview
 ```
 
-`generate_source_docx.py` 默认：跳过第三方文件；清除自有代码的许可证头、仓库地址和开源注释（`"scrub_open_source"`）；脱敏密钥、手机号、邮箱、内网 IP（`"redact"`）。
+`generate_source_docx.py` 默认：跳过第三方文件；清除自有代码的许可证头、仓库地址和开源注释（`"scrub_open_source"`）；脱敏密钥、手机号、邮箱、内网 IP（`"redact"`）；为避免源程序鉴别材料被导入块和注释挤占，默认只在输出材料中裁剪普通注释、`import/include/use` 声明和连续空行。原项目源文件不会被改写。
+
+每个 `projects[]` 可用 `source_material` 调整裁剪策略：
+
+```json
+"source_material": {
+  "trim_comments": true,
+  "trim_imports": true,
+  "max_blank_lines": 1
+}
+```
+
+命令行可临时使用 `--keep-comments` 或 `--keep-imports` 保留对应内容。Go 的 `import (...)`、Python/JavaScript 的多行导入、C/C++ 的 `#include` 等会整体移除；包声明、函数签名和业务实现保留。
+
+`源程序材料预览.html` 是本地单文件页面：顶部显示原始/裁剪后行数、移除注释数、移除导入数、跳过第三方文件数和预计页数；下方按文件列出状态，并可展开查看脱敏后的裁剪样本。预览默认不展示被判定为第三方的文件正文。
 
 每份软著生成：
 
@@ -226,7 +271,58 @@ python3 scripts/generate_source_docx.py \
 3. `源码材料清单.md`
 4. `源程序提取/源程序鉴别材料-XX页.docx`
 
-### 4.0 说明书素材与截图
+### 4.0 真实演示数据准备（截图前）
+
+软著说明书不能只放“测试数据”“示例名称”这类占位内容。需要截图或演示数据时，先从项目源码字段、枚举、页面素材和软件名称生成一份与项目语义一致的合成数据方案：
+
+```bash
+python3 scripts/prepare_demo_data.py \
+  --repo . \
+  --project-name "XXX软件" \
+  --spec soft-copyright-materials/说明书素材.json \
+  --out soft-copyright-materials/演示数据方案.json
+```
+
+脚本只扫描和生成方案，不连接数据库、不写远程服务；会跳过密码、Token、密钥、手机号、身份证和账号等敏感字段，并拒绝“测试 / test / demo / mock / 示例”等占位词。方案同时生成 `演示数据方案.md`，列出记录值、页面入口、需要填写的字段和回滚要求。数据准备是可选运行阶段，不影响离线材料生成。
+
+启动项目后，agent 按方案优先使用项目本地页面，通过浏览器插件或 Computer Use 创建记录；页面没有创建入口时，再使用项目提供的本地 API。每条记录要保存接口返回的业务编号，截图结束后可以按编号回滚。禁止直接连接生产数据库，也不能把方案里的合成记录当作真实业务事实写进说明书。
+
+只有数据创建并在页面上核对成功后，才进入下面的截图步骤。
+
+#### 4.0.1 可选的本地运行与 API 数据执行
+
+材料生成本身不需要启动项目。需要页面截图或页面核验时，先只分析可用启动命令：
+
+```bash
+python3 scripts/project_runtime.py inspect --repo <项目目录>
+python3 scripts/project_runtime.py start --repo <项目目录> --allow-run
+python3 scripts/project_runtime.py status --repo <项目目录>
+python3 scripts/project_runtime.py health http://127.0.0.1:5173/health
+python3 scripts/project_runtime.py stop --repo <项目目录>
+```
+
+`start` 只允许显式启动本地进程，日志和会话信息放在项目 `.ruanzhu/runtime/`；
+不传 `--allow-run` 时不会启动。浏览器插件或 Computer Use 仍是页面操作和截图的首选。
+
+页面没有合适的创建入口时，才配置本地 API 适配器（可复制
+`assets/demo-data-api.example.json`）。执行默认是预览，不会写库：
+
+```bash
+python3 scripts/apply_demo_data.py apply \
+  --plan <材料目录>/演示数据方案.json \
+  --config <材料目录>/演示数据接口.json
+python3 scripts/apply_demo_data.py apply \
+  --plan <材料目录>/演示数据方案.json \
+  --config <材料目录>/演示数据接口.json --allow-write
+python3 scripts/apply_demo_data.py rollback \
+  --rollback-file <材料目录>/演示数据回滚.json \
+  --config <材料目录>/演示数据接口.json --allow-write
+```
+
+写入默认只允许 `localhost` / `127.0.0.1` / `::1`，必须显式配置接口、显式加
+`--allow-write`；脚本按接口返回的业务 ID 生成逆序回滚记录，不保存授权头，不连接数据库。
+
+### 4.1 说明书素材与截图
 
 `generate_docs.py` 检测到 `说明书素材.json` 后，功能模块章节按每个页面生成四小节：
 （一）功能说明 /（二）界面与入口（进入位置、界面元素、取值约束、操作反馈）/（三）操作步骤 /（四）异常处理（错误码表）。
@@ -269,20 +365,33 @@ python3 scripts/capture.py --target mac --app 微信开发者工具 --name 房�
 勾选运行脚本的程序后重启它），否则截出来是纯黑图——脚本会检测到纯色图并报错，不会把黑图混进说明书。
 前端路由项目若素材里的 entry 不是真实 URL，用 `--routes /login /house/list` 手工指定。
 
-`screenshots.py` 只整理、编号、对号，不生成图片；对不上模块的截图会提示，改文件名或手工改清单的 `module` 字段即可。
+`screenshots.py` 只整理、编号、对号，不生成图片；对不上模块的截图会提示，改文件名或手工改清单的 `module` 字段即可。截图前必须优先使用 4.0 生成并创建项目相关数据，禁止用“测试用户”“示例订单”等无业务含义文本代替。
 
-### 4.1 说明书文风要求（必读）
+整理完成后可单独校验材料完整性（不启动浏览器、不生成图片）：
+
+```bash
+python3 scripts/screenshots.py --materials <材料目录> --spec <材料目录>/说明书素材.json \
+  --check --fail-on-missing
+```
+
+它会检查清单文件、图片路径、空文件、未匹配截图和缺少截图的功能模块。
+
+后端项目把截图文件名写成 `api-docs.png`、`api-success.png`、`api-error.png`、`runtime-log.png`（也支持 `knife4j`、`swagger`、`日志` 等关键词），脚本会写入 `evidence_id` 并在 `--check --fail-on-missing` 时校验必需证据。没有真实运行结果时保留“待截图”，不要制作伪造页面或伪造 JSON。
+
+### 4.2 说明书文风要求（必读）
 
 脚本生成的是模板骨架。**产出终稿前，必须按 [references/writing-style.md](references/writing-style.md) 的规范人工充实并改写全部散文章节**，要点：
 
 - **功能按“（一）功能说明 /（二）操作步骤 /（三）异常处理”写**：步骤带界面真实文字、取值约束、失败分支——朱雀实测唯一稳定判人工的写法（0.16），`generate_docs.py` 已按此生成骨架
 - 结构禁忌：密集括号补注、“**X**：”粗体排比、“**Qn：**”FAQ 连排、分号收尾的列表（实测 0.78–0.999 判 AI，即使事实很多）
 - 黑名单句式（“覆盖…体系”“提供…能力”“沉淀为”“核心意义在于”“无论是…还是…都”等）清零
+- 删除“系统优势/技术优势/功能优势/应用优势/核心价值”等通用总结标题；“整套业务闭环是完整的”等结论句改成真实入口、处理、结果和失败分支
+- 关注“可以/系统/模块”等高频词。`aigc_check.py` 会输出全文次数和每千字频率；处理重复主语和模板段落，不做没有语义依据的同义词替换
 - 每段至少一个真实事实（界面文字/路径/版本号/错误码）——为了真实，不指望它降分；**禁止编造**
 - 表格为可读性服务，不当降分手段（实测 0.24–0.997 不稳定）；正式书面语即可，不必刻意口语化
 - 写完后在 Step 6 用 `aigc_check.py` 量化验证，不靠自我感觉
 
-### 4.2 说明书隔离要求
+### 4.3 说明书隔离要求
 
 | 章节 | 隔离要求 |
 | --- | --- |
@@ -291,7 +400,7 @@ python3 scripts/capture.py --target mac --app 微信开发者工具 --name 房�
 | 技术特点 | 技术亮点要与本软著的核心功能挂钩 |
 | 接口清单 | 只列本软著相关的接口（如有） |
 
-### 4.3 多份软著说明书页数建议
+### 4.4 多份软著说明书页数建议
 
 | 份数 | 页数建议 |
 | --- | --- |
@@ -324,7 +433,7 @@ python3 $S/copyright_check.py --config $C --repo $R --fail-on high      # ④ �
 
 | 代码 / 文本 | 处理 |
 | --- | --- |
-| 自有代码（版权人是著作权人或 `self_aliases`） | 提取时自动删除：文件头许可证/版权块、含协议文本或引用标记（参考自/摘自/forked from…）的注释行、仓库/徽章/博客地址、`git clone` 类命令；业务注释保留 |
+| 自有代码（版权人是著作权人或 `self_aliases`） | 提取时自动删除：文件头许可证/版权块、含协议文本或引用标记（参考自/摘自/forked from…）的注释行、仓库/徽章/博客地址、`git clone` 类命令；源程序材料默认再裁剪普通注释和导入/include/use 声明，原代码不改 |
 | 第三方代码（他人版权声明、`node_modules`/`vendor`/`dist`、压缩代码、开源脚手架） | 提取时自动跳过，整份不进材料；不删他人声明。跳过后行数不足会报警，需补选自研文件 |
 | 说明书 / 申请表 / auto-fill 文案 | `oss_scrub.py` 删除“开源协议/License/致谢/参考资料/Star History”整节、徽章行，以及含协议名、开源声明（已开源/源码托管在 Gitee…）、引用标记、开源项目名、仓库或博客地址的句子和表格行 |
 | 产出层复查 | 任何协议、地址、引用残留都判高风险，闸门不通过 |
@@ -352,6 +461,7 @@ python3 $S/aigc_rewrite.py $M                              # ② 预览机械清
 python3 $S/aigc_rewrite.py $M --apply                      #    确认后写回（留 .bak）
 #   ③ Claude 按 $M/AIGC改写任务单.md 逐条改写 .md（先查源码，再动笔）
 python3 $S/aigc_check.py $M --report $M/AIGC检测报告.md --fail-above 35   # ④ 闸门
+# 如需更严格控制本地疑似+AI结构占比：追加 --max-suspect-ratio 0.20
 ```
 
 | 环节 | 谁做 | 要点 |
@@ -369,6 +479,37 @@ python3 $S/aigc_check.py $M --report $M/AIGC检测报告.md --fail-above 35   # 
 - 只改 `.md` 源文件，docx/pdf 一律重新生成；多份软著改写时不得引入别家的功能或源码（黄金原则 2）。
 - 改完向用户汇报：各文件改写前后分数、改写条数、仍需人工确认的段落。
 - 本地分数是按朱雀样本校准的启发式估计，不等于商业检测结论。用户想用外部 AIGC 检测网站复核时，上传材料前须征得用户同意（或让用户自行上传），并先确认已脱敏；结果回来后用 `aigc_calibrate.py --import-report` 回灌样本。
+
+首次生成的默认内容只会引用 `ruanzhu.config.json` 和源码素材；硬件、权限、日志、安装命令、测试结果等字段缺失时输出“待核验”，不会生成看似真实但未经验证的事实。后端项目还会生成 `截图证据计划.md`，要求把真实调试结果补齐后再进入终检。
+
+### 6.1 可选朱雀风格联网检测
+
+需要把材料文本发送给 EdgeOne Makers 的用户，可以显式使用 `scripts/zhusque_check.py`。它兼容 OpenAI Chat Completions 接口，默认模型为 `@makers/deepseek-v4-flash`；这不是本地离线规则的替代品，也不等同于官方商业检测结论。
+
+本地 AIGC 处理会在首次执行 `generate_docs.py` 后自动触发：先运行 `aigc_rewrite.py --apply` 做机械清理，再生成 `AIGC改写任务单.md` 和本地 `AIGC检测报告.md`。这一步完全离线，不会上传材料；任务单中的事实性内容仍需人工/Claude 根据源码确认，不能靠机械替换伪造“人工”文本。
+
+朱雀 API 不会在每次生成或每次改字时自动触发。正文完成事实核对后，使用一次 `finalize` 做全量联网检测；只有用户主动执行并带上 `--allow-upload` 才会上传。最终文本指纹会记录在材料目录内，文本未变化时重复执行不会再次请求。
+
+首次使用时不要把 Key 写进命令、配置或仓库：
+
+```bash
+python3 <skill目录>/scripts/zhusque_check.py bind --open
+```
+
+命令会提示用户前往 [腾讯 EdgeOne Makers 控制台](https://console.cloud.tencent.com/edgeone/makers?tab=models&subTab=apikey) 自行生成 Key，再交互式绑定到本机 macOS Keychain。也可以临时使用环境变量 `MAKERS_MODELS_KEY`，工具不会打印或写出它。
+
+联网检测必须显式确认上传：
+
+```bash
+python3 <skill目录>/scripts/zhusque_check.py finalize <材料目录> \
+  --allow-upload --report <材料目录>/朱雀检测报告.md
+```
+
+`finalize` 会扫描该材料目录中应检测的全部 Markdown、PDF、DOCX 和填表配置，按唯一文本块执行一次全量检测。没有 Key 时只提示控制台链接并停止；`status` 只显示绑定来源，`unbind` 只删除本机 Keychain 项。检测报告不保存 Key；调用前应确认材料已脱敏，且用户同意将文本发送到外部接口。
+
+截图证据计划、源码材料清单、AIGC/版权内部报告不会作为正文上传；重复正文块仍按本地指纹合并，避免为同一内容重复消耗额度。
+
+为减少重复请求和额度消耗，工具会按规范化文本块做本地指纹去重，并把结果缓存到用户缓存目录（macOS 默认 `~/Library/Caches/ruanzhu-kit/zhusque`，不保存原文和 Key）。同一份材料再次检测、同一文本同时出现在 Markdown/PDF 中时，会优先复用缓存；需要强制重测时加 `--no-cache`。默认每个请求最多 12,000 字符，可用 `--max-chars` 调整。普通 `check` 适合抽查，正文确认后的正式流程使用 `finalize`。
 
 ---
 
@@ -542,27 +683,30 @@ python3 scripts/dashboard.py --config soft-copyright-materials/ruanzhu.config.js
 每份软著输出（存放在各自目录下）：
 
 1. `软件说明书.md`（正文来源）
-2. `软件说明书.pdf`（提交件，含可点击目录、页眉页码；由 md 渲染，不经 docx）
+2. `软件说明书.pdf`（提交件，默认采用参考样式的编号目录、章节编号和右下角页码；无页头、无“第 X 页 / 共 N 页”；由 md 渲染，不经 docx）
 3. `申请表填报文案.md`（application_form.py 生成，与填表配置同源）
 4. `源码材料清单.md`
 5. `截图清单.json` + `截图/`（有截图时）
-6. `源程序提取/源程序DOCX生成报告.md`（含跳过的第三方文件、脱敏与清除统计）
-7. `源程序提取/源程序鉴别材料-XX页.docx`（编辑稿）
-8. `源程序提取/源程序鉴别材料-XX页.pdf`（提交件）
-9. `auto-fill/config.json` + `auto-fill/长文本/`（填表用）
-10. `填表操作计划.md`（form_plan.py 生成）
-11. `AIGC检测报告.md`（内部留档，不提交）
-12. `AIGC改写任务单.md`（内部留档，不提交）
-13. `版权风险检查报告.md`（位于 output_root，内部留档，不提交）
-14. `看板.html`（位于 output_root，总览用，不提交）
-15. `说明书素材.json` + `预览.md`（位于 output_root，内部留档）
+6. `截图证据计划.md`（后端/API 项目；真实接口、错误响应、日志和调试页采集清单）
+7. `演示数据方案.json` + `演示数据方案.md`（截图前创建本地业务数据的方案与回滚提示）
+8. `源程序材料预览.html`（源程序裁剪预览，内部留档）
+9. `源程序提取/源程序DOCX生成报告.md`（含跳过的第三方文件、脱敏与清除统计）
+10. `源程序提取/源程序鉴别材料-XX页.docx`（编辑稿）
+11. `源程序提取/源程序鉴别材料-XX页.pdf`（提交件）
+12. `auto-fill/config.json` + `auto-fill/长文本/`（填表用）
+13. `填表操作计划.md`（form_plan.py 生成）
+14. `AIGC检测报告.md`（内部留档，不提交）
+15. `AIGC改写任务单.md`（内部留档，不提交）
+16. `版权风险检查报告.md`（位于 output_root，内部留档，不提交）
+17. `看板.html`（位于 output_root，总览用，不提交）
+18. `说明书素材.json` + `预览.md`（位于 output_root，内部留档）
 
 ---
 
-## 说明书标准（10 章结构）
+## 说明书章节标准（默认 10 章，可按场景扩展）
 
-0. 说明书 PDF 每页带页眉（软件全称 + 版本号）和“第 X 页 / 共 N 页”，封面页不带（render_pdfs.py 自动加）
-1. 软件概述（定位、目标、特性、版本）
+0. 默认采用 10 章基础结构；复杂项目可在 `projects[].extra_chapters` 中追加数据治理、接口管理、权限审计、任务调度、算法流程等真实章节，简单项目不必为了凑章数扩写。说明书 PDF 默认采用参考样式：简洁编号目录、`01-章节名` 章节标签、软件名与章节名副标题、右下角单页码；目录和正文标题不添加装饰性圆点，不添加页头和“共 N 页”页脚。可通过 `render_pdfs.py --style clean` 切换为底部居中页码的简洁样式（render_pdfs.py 自动处理）
+1. 软件概述（定位、目标、特性、适用角色、源码范围；申请人信息和发表信息不写入说明书）
 2. 软件架构（架构图、分层说明、技术选型）
 3. 环境要求（开发环境、运行环境、第三方依赖）
 4. 安装部署（依赖安装、启动方式、构建发布）
@@ -571,7 +715,7 @@ python3 scripts/dashboard.py --config soft-copyright-materials/ruanzhu.config.js
 7. 功能模块（各模块功能详细描述 —— **隔离的核心所在**）
 8. 运维管理（日志、监控、告警、备份）
 9. 常见问题（使用/配置/功能类问题解答）
-10. 附录（术语表、接口清单、依赖清单、目录结构）
+10. 附录（术语表、接口清单、依赖清单、目录结构）；如配置扩展章节，编号顺延
 
 ---
 

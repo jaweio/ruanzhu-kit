@@ -14,6 +14,7 @@ from docx.shared import Cm, Pt
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from copyright_check import redact_line  # noqa: E402
 from oss_scrub import own_tokens, scrub_code, third_party_reasons  # noqa: E402
+from source_material import compact_blank_lines, strip_comments, strip_imports  # noqa: E402
 
 
 def set_cell_no_wrap(cell):
@@ -59,10 +60,11 @@ def fixed_layout(table):
     layout.set(qn("w:type"), "fixed")
 
 
-def read_lines(repo, files, redact=True, tokens=(), scrub=True):
-    """读取取材文件：跳过第三方文件，清除自有代码的开源/仓库痕迹，脱敏敏感信息。"""
+def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=True,
+               trim_imports=True, max_blank_lines=1):
+    """读取取材文件：只裁剪输出材料，不改写源文件。"""
     lines, missing, skipped = [], [], []
-    stats = {"headers": 0, "dropped": 0}
+    stats = {"headers": 0, "dropped": 0, "comments": 0, "imports": 0, "blank_lines": 0}
     for rel in files:
         p = repo / rel
         if not p.exists():
@@ -79,6 +81,15 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True):
             stats["dropped"] += st["dropped"]
         else:
             file_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        if trim_comments:
+            file_lines, removed = strip_comments(file_lines, rel)
+            stats["comments"] += removed
+        if trim_imports:
+            file_lines, removed = strip_imports(file_lines, rel)
+            stats["imports"] += removed
+        before_compact = len(file_lines)
+        file_lines = compact_blank_lines(file_lines, max_blank_lines)
+        stats["blank_lines"] += max(0, before_compact - len(file_lines))
         for line in file_lines:
             line = line.replace("\t", "  ")
             lines.append(redact_line(line) if redact else line)
@@ -104,7 +115,7 @@ def add_page(doc, page_lines, lines_per_page, font_size_pt, row_height_pt):
         run.font.size = Pt(font_size_pt)
 
 
-def build_doc(repo, out_root, project, tokens=()):
+def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_keep_imports=False):
     lines_per_page = int(project.get("lines_per_page", 90))
     pages = int(project.get("source_pages", 60))
     front_pages = pages // 2
@@ -113,7 +124,17 @@ def build_doc(repo, out_root, project, tokens=()):
     row_height = float(project.get("source_row_height", 8.15))
     redact = project.get("redact", True)
     scrub = project.get("scrub_open_source", True)
-    lines, missing, skipped, scrub_stats = read_lines(repo, project.get("source_files", []), redact, tokens, scrub)
+    source_material = project.get("source_material", {}) or {}
+    if not isinstance(source_material, dict):
+        source_material = {}
+    trim_comments = bool(source_material.get("trim_comments", project.get("trim_comments", True))) and not cli_keep_comments
+    trim_imports = bool(source_material.get("trim_imports", project.get("trim_imports", True))) and not cli_keep_imports
+    max_blank_lines = int(source_material.get("max_blank_lines", 1))
+    max_blank_lines = max(0, min(max_blank_lines, 3))
+    lines, missing, skipped, scrub_stats = read_lines(
+        repo, project.get("source_files", []), redact, tokens, scrub,
+        trim_comments, trim_imports, max_blank_lines,
+    )
     need = pages * lines_per_page
     if skipped:
         print(f"[{project['name']}] 跳过 {len(skipped)} 个第三方文件：" + "、".join(r for r, _ in skipped), file=sys.stderr)
@@ -153,6 +174,9 @@ def build_doc(repo, out_root, project, tokens=()):
         f"- 敏感信息脱敏：{'已开启（密钥/手机号/邮箱/内网 IP）' if redact else '未开启'}\n"
         f"- 开源痕迹清除：{'已开启' if scrub else '未开启'}（删除自有许可证/版权头 {scrub_stats['headers']} 处，"
         f"含仓库地址或开源字样的注释行 {scrub_stats['dropped']} 行）\n"
+        f"- 材料压缩：普通注释 {'已移除' if trim_comments else '保留'} {scrub_stats['comments']} 行；"
+        f"导入/include/use 声明 {'已移除' if trim_imports else '保留'} {scrub_stats['imports']} 行；"
+        f"连续空行已压缩（最多 {max_blank_lines} 行）\n"
         f"- 自动跳过的第三方文件：{len(skipped)} 个\n"
         + "".join(f"  - `{r}`：{why}\n" for r, why in skipped)
         + f"- 可用代码行数：{len(lines)}（需要 {need}）\n",
@@ -165,15 +189,30 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="soft-copyright-materials/ruanzhu.config.json")
     parser.add_argument("--repo", default=".")
+    parser.add_argument("--keep-comments", action="store_true", help="保留普通代码注释（默认裁剪）")
+    parser.add_argument("--keep-imports", action="store_true", help="保留 import/include/use 声明（默认裁剪）")
+    parser.add_argument("--preview", action="store_true", help="同时生成源程序材料 HTML 可视化预览")
+    parser.add_argument("--preview-out", help="预览 HTML 输出路径")
+    parser.add_argument("--preview-json", help="同时输出预览统计 JSON")
+    parser.add_argument("--preview-sample-lines", type=int, default=120, help="每个文件预览最多展示多少行")
     args = parser.parse_args()
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
     out_root = Path(cfg.get("output_root", "soft-copyright-materials"))
     repo = Path(args.repo)
     tokens = own_tokens(cfg, repo)
     for project in cfg["projects"]:
-        build_doc(repo, out_root, project, tokens)
+        build_doc(repo, out_root, project, tokens, args.keep_comments, args.keep_imports)
+    if args.preview:
+        from source_preview import write_preview
+        preview_out = Path(args.preview_out) if args.preview_out else out_root / "源程序材料预览.html"
+        write_preview(
+            cfg, Path(args.config), repo, preview_out,
+            False if args.keep_comments else None,
+            False if args.keep_imports else None,
+            None, max(1, args.preview_sample_lines), args.preview_json,
+        )
+        print(preview_out.resolve())
 
 
 if __name__ == "__main__":
     main()
-

@@ -59,6 +59,17 @@ ROUTE_PATTERNS = [
     r'[\'"`](pages/[\w/-]+)[\'"`]',            # 小程序 app.json
     r'@(?:GetMapping|PostMapping|RequestMapping)\s*\(\s*[\'"]([^\'"\n]+)',
 ]
+API_PATTERNS = [
+    # Spring MVC / JAX-RS
+    (r'@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)\s*\(\s*["\']([^"\'\n]*)', "annotation"),
+    (r'@(?:GET|POST|PUT|DELETE|PATCH)\s*\(\s*["\']([^"\'\n]*)', "jaxrs"),
+    # Express / Fastify / Koa style routers
+    (r'\b(?:router|app|server)\.(get|post|put|delete|patch|options)\s*\(\s*["\']([^"\'\n]*)', "js"),
+    # FastAPI / Flask
+    (r'@(?:router|app)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\'\n]*)', "python"),
+    # Go net/http and common routers
+    (r'\.(GET|POST|PUT|DELETE|PATCH|Handle|HandleFunc)\s*\(\s*["\']([^"\'\n]*)', "go"),
+]
 TITLE_PATTERNS = [
     rf'(?:title|navigationBarTitleText|pageTitle)\s*[:=]\s*[\'"`]([^\'"`\n]*{CJK}[^\'"`\n]*)',
     rf'^\s*(?://|#|\*|<!--)\s*({CJK}{{2,20}})\s*(?:页面|界面|视图|模块|组件)?\s*$',
@@ -128,6 +139,83 @@ def route_map(repo, files):
         for m in re.finditer(ROUTE_PATTERNS[1], text):
             routes.setdefault(Path(m.group(1)).name, "/" + m.group(1))
     return routes
+
+
+def extract_apis(repo, files):
+    """从源码提取接口事实；只记录源码中出现的 method/path，不猜测运行结果。"""
+    apis = []
+    for path in files:
+        if path.suffix.lower() not in CODE_EXT:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        base_path = ""
+        # 类级别的 Spring @RequestMapping 作为路径前缀，仅在同一文件内拼接。
+        if path.suffix.lower() in {".java", ".kt"}:
+            m = re.search(r'@RequestMapping\s*\(\s*["\']([^"\'\n]*)', text)
+            base_path = m.group(1).rstrip("/") if m else ""
+        for pattern, kind in API_PATTERNS:
+            for match in re.finditer(pattern, text, re.I | re.M):
+                groups = match.groups()
+                if kind == "annotation":
+                    method, route = groups[0].replace("Mapping", "").upper(), groups[1]
+                    if method == "REQUEST":
+                        # 类级别 @RequestMapping 只作为前缀，不当作一个可调用接口。
+                        continue
+                elif kind == "jaxrs":
+                    method, route = "HTTP", groups[0]
+                else:
+                    method, route = groups[0].upper(), groups[1]
+                route = (base_path + "/" + route.lstrip("/")).replace("//", "/") or "/"
+                line = text.count("\n", 0, match.start()) + 1
+                item = {"method": method, "path": route, "file": str(path.relative_to(repo)), "line": line}
+                if item not in apis:
+                    apis.append(item)
+    return sorted(apis, key=lambda x: (x["path"], x["method"], x["file"]))
+
+
+def backend_detected(files, apis):
+    if apis:
+        return True
+    names = " ".join(str(p).lower() for p in files)
+    return any(token in names for token in ("go.mod", "pom.xml", "build.gradle", "manage.py", "main.py", "application.yml", "application.yaml"))
+
+
+def api_docs_enabled(files):
+    """仅在源码/依赖配置出现文档组件时把 Knife4j/OpenAPI 证据列为必需。"""
+    dependency_names = {"pom.xml", "build.gradle", "build.gradle.kts", "package.json", "requirements.txt", "pyproject.toml", "go.mod"}
+    dependency_markers = ("knife4j", "springdoc", "swagger-ui", "swaggerui", "swagger", "openapi")
+    source_markers = ("@openapidefinition", "@operation", "@swagger", "swaggerui", "swagger-ui")
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore").lower()
+        except OSError:
+            continue
+        config_file = path.name.lower().startswith("application") and path.suffix.lower() in {".yml", ".yaml", ".properties", ".json"}
+        if ((path.name.lower() in dependency_names and any(marker in text for marker in dependency_markers))
+                or (config_file and any(marker in text for marker in ("springdoc", "knife4j", "swagger")))
+                or any(marker in text for marker in source_markers)):
+            return True
+    return False
+
+
+def evidence_plan(backend, apis, docs_enabled=False):
+    if not backend:
+        return []
+    first = apis[0] if apis else None
+    suffix = f"（优先使用 {first['method']} {first['path']}）" if first else "（选择源码中真实存在的接口）"
+    return [
+        {"id": "api-docs", "title": "Knife4j/OpenAPI 接口文档页", "required": docs_enabled,
+         "note": "项目已检测到文档组件，需采集真实调试页" if docs_enabled else "未检测到文档组件；如项目实际启用，请在确认后补采集"},
+        {"id": "api-success", "title": "真实接口成功请求与 JSON 响应", "required": True,
+         "note": f"使用源码接口和真实业务字段{suffix}，脱敏后截图"},
+        {"id": "api-error", "title": "参数校验失败或 HTTP 4xx 返回", "required": True,
+         "note": "使用项目真实校验规则触发，保留状态码和错误响应"},
+        {"id": "runtime-log", "title": "启动日志与业务请求日志", "required": True,
+         "note": "截取项目真实 stdout/日志文件，不补写日志内容"},
+    ]
 
 
 def clean_ui_text(s):
@@ -219,6 +307,15 @@ def preview(spec):
     thin = [p["module"] for p in spec["pages"] if score(p) < 4]
     if thin:
         out += ["", f"界面证据偏少的模块（写正文前需人工补充或改选文件）：{'、'.join(thin[:10])}"]
+    if spec.get("backend"):
+        out += ["", "## 后端证据计划", "", "> 以下证据必须来自真实运行或调试结果，不能用模板文字代替。", "",
+                "| ID | 证据 | 采集说明 |", "|---|---|---|"]
+        for item in spec.get("evidence_plan", []):
+            out.append(f"| {item['id']} | {item['title']} | {item['note']} |")
+        if spec.get("apis"):
+            out += ["", "### 源码接口清单", "", "| 方法 | 路径 | 源码 | 行号 |", "|---|---|---|---|"]
+            for api in spec["apis"][:40]:
+                out.append(f"| {api['method']} | `{api['path']}` | `{api['file']}` | {api['line']} |")
     return "\n".join(out) + "\n"
 
 
@@ -236,6 +333,9 @@ def main():
     if not files:
         raise SystemExit(f"{repo} 下没有扫描到源码文件")
     routes = route_map(repo, files)
+    apis = extract_apis(repo, files)
+    backend = backend_detected(files, apis)
+    docs_enabled = api_docs_enabled(files)
     candidates = [p for p in files if p.suffix.lower() in UI_EXT]
     pages = [extract_page(repo, p, routes) for p in candidates]
     pages = [p for p in pages if score(p) > 0]
@@ -256,6 +356,9 @@ def main():
         "repo": str(repo),
         "stats": stats(repo, files),
         "routes_found": len(routes),
+        "backend": backend,
+        "apis": apis,
+        "evidence_plan": evidence_plan(backend, apis, docs_enabled),
         "pages": pages,
     }
     out = Path(args.out)

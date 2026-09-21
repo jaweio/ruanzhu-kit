@@ -1,6 +1,7 @@
 {
   "project_name": "示例项目",
   "output_root": "soft-copyright-materials",
+  "document_style": "reference",
   "copyright_holder": "【待填写】",
   "development_completed_date": "【待填写】",
   "first_publication_date": "未发表",
@@ -12,10 +13,37 @@
       "name": "示例智能协作平台软件",
       "short_name": "示例平台",
       "version": "V1.0",
-      "position": "AI 智能协作平台",
-      "summary": "用于说明该软件的用途、目标用户和核心能力。",
+      "document_kind": "backend",
+      "position": "【待填写：软件类型】",
+      "summary": "【待填写：软件用途和核心入口，必须引用项目事实】",
+      "scope": "【待填写：软件负责的业务范围与不负责的边界】",
+      "architecture_overview": "【待填写：从真实源码整理架构和调用关系】",
+      "architecture_layers": [],
+      "data_flow": "【待填写：一次真实请求从入口到响应的步骤】",
+      "tech_stack": [],
+      "hardware": [],
+      "environment": [],
+      "permissions": [],
+      "install_prerequisites": "【待填写：项目实际安装前置条件】",
+      "install_steps": [],
+      "verification": [],
+      "configuration_overview": "【待填写：实际配置项和生效方式】",
+      "config_items": [],
+      "quick_start": [],
+      "operations": [],
+      "logging": "【待填写：实际日志文件、字段和查看方式】",
+      "data_maintenance": "【待填写：实际数据、缓存和备份处理方式】",
+      "security": "【待填写：源码和部署配置中实际存在的安全措施】",
+      "faq": [],
+      "tests": [],
       "source_pages": 60,
       "lines_per_page": 90,
+      "source_material": {
+        "trim_comments": true,
+        "trim_imports": true,
+        "max_blank_lines": 1
+      },
+      "extra_chapters": [],
       "modules": [
         [
           "模块一",
@@ -38,7 +66,8 @@
         ]
       ],
       "source_files": [
-        "src/main/index.ts"
+        "src/main/index.ts",
+        "server/controller/health.go"
       ],
       "redact": true,
       "scrub_open_source": true
