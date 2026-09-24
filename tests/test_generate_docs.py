@@ -184,3 +184,20 @@ class GenerateDocsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DropEmptySectionsTests(unittest.TestCase):
+    def test_empty_sections_removed_and_renumbered(self):
+        from generate_docs import drop_empty_sections
+        md = ("# 配置说明\n\n## 5.1 配置概述\n\n\n## 5.2 配置项清单\n| 配置项 | 作用 |\n| --- | --- |\n\n"
+              "## 5.3 存储\n数据保存在本机。\n\n# 使用指南\n\n## 6.1 快速上手\n打开首页。\n")
+        out = drop_empty_sections(md)
+        self.assertNotIn("配置概述", out)
+        self.assertNotIn("配置项清单", out)
+        self.assertIn("## 5.1 存储", out)
+        self.assertIn("## 6.1 快速上手", out)
+
+    def test_hardware_without_values_is_blank(self):
+        from environment_profile import _hardware
+        self.assertEqual(_hardware({"recommended": True, "cpu_cores": ""}), "")
+        self.assertIn("CPU", _hardware({"recommended": True, "cpu_cores": "4"}))

@@ -48,6 +48,9 @@ def _hardware(value):
         parts.append(f"网络：{str(value['network']).strip()}")
     if value.get("storage_note"):
         parts.append(str(value["storage_note"]).strip())
+    # 只有“建议配置”标记、没有任何实际参数时视为未填写，避免输出空洞的“建议配置。”
+    if parts == ["建议配置"]:
+        return ""
     return "；".join(parts) + ("。" if parts else "")
 
 

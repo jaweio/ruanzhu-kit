@@ -86,6 +86,35 @@ def table(rows, headers):
     return "\n".join(out)
 
 
+def drop_empty_sections(text):
+    """删除没有正文的二级小节（只有标题，或表格只有表头），并按章重新编号。
+
+    配置缺字段时生成器会省略内容行，但标题和表头仍在；正式说明书不保留这种空壳。
+    """
+    lines = text.split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        if not lines[i].startswith("## "):
+            out.append(lines[i])
+            i += 1
+            continue
+        j = i + 1
+        while j < len(lines) and not lines[j].startswith("#"):
+            j += 1
+        body = [l for l in lines[i + 1:j] if l.strip()]
+        table_only = body and all(l.lstrip().startswith("|") for l in body) and len(body) <= 2
+        if body and not table_only:
+            out.extend(lines[i:j])
+        i = j
+    counters = {}
+
+    def renumber(m):
+        chapter = m.group(1)
+        counters[chapter] = counters.get(chapter, 0) + 1
+        return f"## {chapter}.{counters[chapter]} "
+    return re.sub(r"^## (\d+)\.\d+ ", renumber, "\n".join(out), flags=re.M)
+
+
 def undent(text):
     """模板统一缩进 4 格；插入的多行表格没有缩进，textwrap.dedent 会失效，这里逐行去掉。"""
     return "\n".join(line[4:] if line.startswith("    ") else line for line in text.splitlines()) + "\n"
@@ -913,7 +942,7 @@ def write_project(root, cfg, project, spec=None):
     chapters.mkdir(parents=True, exist_ok=True)
     source_dir.mkdir(parents=True, exist_ok=True)
     shots = load_shots(root, project)
-    text = manual(project, cfg, spec, shots)
+    text = drop_empty_sections(manual(project, cfg, spec, shots))
     (out / "软件说明书.md").write_text(text, encoding="utf-8")
     (out / "申请表填报文案.md").write_text(application_copy(project, cfg, spec), encoding="utf-8")
     (out / "源码材料清单.md").write_text(source_list(project), encoding="utf-8")
