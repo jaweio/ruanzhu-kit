@@ -54,7 +54,10 @@ LINE_RULES = [
 
 # 旧版本生成器写入的整段通用模板。只在正文同时出现这些固定标志时裁剪，
 # 不按章节编号盲删用户自己写的内容；新版 generate_docs.py 已不会再生成这些段落。
-TEMPLATE_SECTION_RE = re.compile(r"(?ms)^(#{2,3})\s+([^\n]+)\n.*?(?=^#{2,3}\s+|\Z)")
+# Stop at any Markdown heading.  The previous ``#{2,3}`` boundary could let
+# a removable ``## 测试用例`` section consume the following ``# 11`` chapter
+# and silently delete its introduction and title from the manual.
+TEMPLATE_SECTION_RE = re.compile(r"(?ms)^(#{1,6})\s+([^\n]+)\n.*?(?=^#{1,6}\s+|\Z)")
 
 
 def prune_template_sections(text):
@@ -88,14 +91,14 @@ def prune_template_sections(text):
             remove = True
         elif title in {"软件无法启动怎么办？", "配置不生效怎么办？", "功能执行失败怎么办？"}:
             remove = True
-        elif title == "测试用例" and all(x in body for x in ("TC-001", "TC-002", "TC-003")):
-            remove = True
+        # Configured test cases are evidence, not generic filler.  Keep them
+        # even when they use the conventional TC-001 numbering.
         if remove:
             hits[f"删除旧版通用模板：{title}"] = hits.get(f"删除旧版通用模板：{title}", 0) + 1
             return ""
         return body
 
-    # 版本信息中只有申请表字段属于错误位置，源码范围仍保留。
+    # 版本信息和源码取材路径都属于申请/生产信息，不应出现在说明书正文。
     def clean_version(match):
         title = re.sub(r"^\d+(?:\.\d+)*\s*", "", match.group(2)).strip()
         body = match.group(0)

@@ -46,7 +46,7 @@ def display(value, field):
 def plan(cfg, fmap, cfg_path, long_dir):
     out = [f"# 申请表填表操作计划（{cfg.get('_project', '')}）", "",
            f"> 地址：{fmap['url']}", f"> **{fmap['stop_rule']}**",
-           "> 值一律来自 `auto-fill/config.json`，页面上不即兴编写内容；任何字段对不上就停下问用户。", "",
+           "> 可填写值来自 `auto-fill/config.json`；著作权人由登录账户带入。页面上不即兴编写内容；任何字段对不上就停下问用户。", "",
            "## 操作前", "",
            "1. 由**用户本人**在 Chrome 里登录中国版权保护中心账号；agent 不碰账号密码。",
            "2. 确认浏览器里是正确的著作权人账户。",
@@ -69,6 +69,10 @@ def plan(cfg, fmap, cfg_path, long_dir):
                 name = f["key"].split(".")[-1] + ".txt"
                 longs.append((name, str(val)))
                 shown = f"{n} 字长文本 → 见 `{long_dir}/{name}`（整段粘贴，勿手打）"
+            elif f["type"] == "readonly" and not str(val or "").strip():
+                shown = "登录账号带入（无需本地填写，填表后回读）"
+            elif f["type"] == "readonly":
+                shown = f"登录账号带入；配置仅作核对：`{val}`"
             elif val is None:
                 shown = "⚠️ 配置里没有这个字段"
             else:
@@ -78,10 +82,13 @@ def plan(cfg, fmap, cfg_path, long_dir):
                 checks.append(f"❌超长 {n}/{f['limit']}")
             if f.get("min") and isinstance(val, str) and n < f["min"]:
                 checks.append(f"❌不足 {n}/{f['min']}")
+            if (val is None or (isinstance(val, str) and not val.strip())) \
+                    and not f.get("optional") and f["type"] != "readonly":
+                checks.append("❌未填写")
             if isinstance(val, str) and PLACEHOLDER.search(val):
-                checks.append("❌占位符未填")
+                checks.append("❌含占位文字")
             if f.get("verify"):
-                checks.append("填完回读")
+                checks.append("填完回读" if f["type"] != "readonly" else "回读登录账号")
             out.append(f"| {f['label']} | {f['type']} | {shown} | {'；'.join(checks) or '—'}"
                        + (f"<br>{note}" if note else "") + " |")
         if st.get("actions"):
@@ -112,7 +119,12 @@ def verify(cfg, fmap, actual):
                 continue
             want = str(display(dig(cfg, f["key"]), f) or "")
             got = str(actual[short])
-            if f["type"] == "file":
+            if f["type"] == "readonly":
+                # The account is authoritative when no local baseline was
+                # supplied.  If a baseline exists, compare it as an optional
+                # consistency check.
+                ok = bool(got.strip()) and (not want.strip() or re.sub(r"\s", "", want) == re.sub(r"\s", "", got))
+            elif f["type"] == "file":
                 ok = Path(want).name.lower() in got.lower()
             elif f["type"] == "textarea" and chars(want) > 120:
                 ok = chars(got) == chars(want)          # 长文本比字数，防止被截断

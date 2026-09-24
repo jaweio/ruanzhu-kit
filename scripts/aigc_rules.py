@@ -111,7 +111,16 @@ PAREN = re.compile(r"[(（](?![一二三四五六七八九十\d]{1,3}[)）])[^()
 FAQ_Q = re.compile(r"(?m)^\s*(?:\*\*)?\s*Q\d+\s*[:：.、]|^\s*\*\*[^*\n]{4,40}[?？]\*\*")
 BOLD_LEAD = re.compile(r"(?m)^\s*(?:[-*+]\s+)?\*\*[^*\n]{1,24}\*\*\s*[:：]")
 
-PLACEHOLDER = re.compile(r"【(?:待|[^】]*(?:字以内|字内|例：|行数】))[^】]*】|按项目实际(?:填写|依赖填写|支持平台填写)")
+# 草稿阶段的待办标记：【待填写/待核验/待补充…】【截图预留：…】等。它们只能出现在内部草稿里，
+# 进入提交件（说明书 PDF、申请表字段）即为缺陷——render_pdfs / artifact_manifest 以此为硬闸门。
+PLACEHOLDER = re.compile(r"【\s*(?:待|[^】\n]*(?:预留|占位|字以内|字内|例：|行数))[^】\n]*】"
+                         r"|按项目实际(?:填写|依赖填写|支持平台填写)")
+
+
+def find_placeholders(text):
+    """返回 [(行号, 占位文本)]；提交件中出现任何一处都必须拦截。"""
+    return [(no, m.group(0)) for no, line in enumerate(text.splitlines(), 1)
+            for m in PLACEHOLDER.finditer(line)]
 
 SENT_SPLIT = re.compile(r"(?<=[。！？!?；;])")
 

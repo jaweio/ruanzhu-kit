@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from aigc_rules import (ABSTRACT_NOUNS, BOLD_LEAD, CONDITION, FAQ_Q, EXPERIENCE, OPERATION_VERBS, PAREN, PLACEHOLDER,  # noqa: E402
                         TEMPLATE_OPENERS, blacklist_hits, cv, fact_hits, item_shape, load_blocks,
                         common_term_hits, common_term_warnings, marketing_hits, sentences)
+from artifact_manifest import formal_material_paths  # noqa: E402
 
 ENUM = re.compile(r"(?:[\u4e00-\u9fa5]{2,6}、){4,}[\u4e00-\u9fa5]{2,6}")
 
@@ -32,7 +33,9 @@ def is_operation(sentence):
     return bool(re.search(OPERATION_VERBS, sentence) or re.search(CONDITION, sentence))
 
 LOW, HIGH = 35, 55
-SKIP_NAMES = {"源码材料清单.md", "截图证据计划.md", "AIGC检测报告.md", "AIGC改写任务单.md", "源程序提取报告.md", "待补充信息清单.md"}
+SKIP_NAMES = {"源码材料清单.md", "截图证据计划.md", "AIGC检测报告.md", "AIGC检测报告-当前复核.md",
+              "AIGC改写任务单.md", "源程序提取报告.md", "缺失信息清单.md", "待补充信息清单.md", "材料上传清单.json"}
+SKIP_DIRS = {"源程序提取", "说明书章节", "旧版未裁剪材料", "旧命名兼容", "归档", "archive", "历史", "legacy", "补充声明"}
 
 
 def grade(score):
@@ -247,8 +250,20 @@ def collect(targets):
         if t.is_file():
             files.append(t)
             continue
+        # 生成了正式材料清单后，目录扫描只读取“正文/填表复核/文档提交件”。
+        # 程序源码 PDF 不参与 AIGC 文风评分，避免代码和旧版材料污染结果。
+        formal = formal_material_paths(t)
+        if formal:
+            candidates = [t / "软件说明书.md", t / "申请表填报文案.md", t / "auto-fill" / "config.json"]
+            doc_pdf = formal.get("docPdf")
+            if doc_pdf and doc_pdf.suffix.lower() == ".pdf":
+                candidates.append(doc_pdf)
+            files.extend(p for p in candidates if p.is_file() and p.name not in SKIP_NAMES)
+            continue
         for p in sorted(t.rglob("*")):
-            if not p.is_file() or "源程序提取" in p.parts or p.name in SKIP_NAMES or "说明书章节" in p.parts:
+            if (not p.is_file() or p.name in SKIP_NAMES
+                    or any(part in SKIP_DIRS for part in p.parts)
+                    or p.name.endswith((".bak", ".backup"))):
                 continue
             if p.suffix == ".md":
                 files.append(p)

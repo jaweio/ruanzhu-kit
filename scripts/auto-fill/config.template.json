@@ -1,33 +1,34 @@
 {
-  "_comment": "R11 自动填表配置。PDF 路径相对于本文件位置。",
+  "_comment": "R11 自动填表配置。正常流程由 application_form.py 生成，勿手写。除登录账户带入的 copyrightHolder 和可选 languageOther 外，空字符串表示未填写，auto-fill.js 会拒绝执行。PDF 路径相对于本文件位置。",
 
   "step2_basic": {
-    "softwareName": "【软件全称，与说明书保持完全一致】",
-    "shortName":    "【软件简称，10字以内】",
+    "softwareName": "",
+    "shortName":    "",
     "version":      "V1.0",
-    "completionDate": "【开发完成日期，格式 YYYY-MM-DD，选上周工作日】",
-    "published":    false
+    "completionDate": "",
+    "published":    false,
+    "copyrightHolder": ""
   },
 
   "step3_dev": {
-    "devHardware":   "Apple Mac计算机，CPU 8核及以上，内存16GB及以上，磁盘50GB及以上",
-    "runHardware":   "PC或Mac计算机，内存8GB及以上，具备足够磁盘空间用于软件安装及数据存储",
-    "devOS":         "macOS 13及以上（Ventura/Sonoma）",
-    "devTools":      "【开发工具，50字以内，例：Electron、React、Vite、Node.js、TypeScript、SQLite】",
-    "runOS":         "Windows 10/11、macOS系统",
-    "runSupport":    "【运行支撑环境，50字以内，例：Node.js 18.0及以上，Electron 28.0及以上，npm 9.0及以上】",
-    "language":      "JavaScript",
-    "languageOther": "TypeScript、TSX、CSS",
-    "sourceLines":   "【源程序行数】"
+    "devHardware":   "",
+    "runHardware":   "",
+    "devOS":         "",
+    "devTools":      "",
+    "runOS":         "",
+    "runSupport":    "",
+    "language":      "",
+    "languageOther": "",
+    "sourceLines":   ""
   },
 
   "step4_features": {
-    "devPurpose":      "【开发目的，50字以内】",
-    "targetIndustry":  "【面向领域/行业，50字以内】",
-    "mainFunction":    "【软件主要功能，500-1300字，只描述本软著的核心功能，不提其他软著的功能】",
-    "techFeatureTag":  "人工智能软件",
-    "techFeatureText": "【技术特点关键词，100字以内】",
-    "programPdf":      "../源程序提取/源程序鉴别材料-60页.pdf",
-    "docPdf":          "../软件说明书.pdf"
+    "devPurpose":      "",
+    "targetIndustry":  "",
+    "mainFunction":    "",
+    "techFeatureTag":  "应用软件",
+    "techFeatureText": "",
+    "programPdf":      "",
+    "docPdf":          ""
   }
 }

@@ -27,8 +27,8 @@
          "note": "填完按 Esc 关掉日期面板"},
         {"key": "step2_basic.published", "label": "发表状态", "type": "choice",
          "map": {"false": "未发表", "true": "已发表"}, "verify": true},
-        {"key": "step2_basic.copyrightHolder", "label": "著作权人", "type": "readonly",
-         "note": "通常由登录账户带入；只核对是否与配置一致，不一致就停下问用户"}
+        {"key": "step2_basic.copyrightHolder", "label": "著作权人", "type": "readonly", "verify": true,
+         "note": "由登录账户带入；不需要在配置中重复填写，只回读核对当前账号名称"}
       ],
       "next": "下一步"
     },
@@ -45,7 +45,7 @@
         {"key": "step3_dev.runOS", "label": "运行平台", "type": "textarea", "limit": 50},
         {"key": "step3_dev.runSupport", "label": "运行支撑环境", "type": "textarea", "limit": 50},
         {"key": "step3_dev.language", "label": "编程语言", "type": "choice"},
-        {"key": "step3_dev.languageOther", "label": "其他编程语言", "type": "textarea", "limit": 50},
+        {"key": "step3_dev.languageOther", "label": "其他编程语言", "type": "textarea", "limit": 50, "optional": true},
         {"key": "step3_dev.sourceLines", "label": "源程序量", "type": "number", "verify": true,
          "note": "全项目源码行数，不是 60 页取材行数"}
       ],

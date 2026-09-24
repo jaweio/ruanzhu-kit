@@ -12,9 +12,9 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from copyright_check import redact_line  # noqa: E402
-from oss_scrub import own_tokens, scrub_code, third_party_reasons  # noqa: E402
-from source_material import compact_blank_lines, strip_comments, strip_imports  # noqa: E402
+from oss_scrub import own_tokens  # noqa: E402
+from source_material_render import build_source_html, collect_source_material, read_lines  # noqa: E402
+from output_names import source_material_docx_name, source_material_html_name  # noqa: E402
 
 
 def set_cell_no_wrap(cell):
@@ -60,42 +60,6 @@ def fixed_layout(table):
     layout.set(qn("w:type"), "fixed")
 
 
-def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=True,
-               trim_imports=True, max_blank_lines=1):
-    """读取取材文件：只裁剪输出材料，不改写源文件。"""
-    lines, missing, skipped = [], [], []
-    stats = {"headers": 0, "dropped": 0, "comments": 0, "imports": 0, "blank_lines": 0}
-    for rel in files:
-        p = repo / rel
-        if not p.exists():
-            missing.append(rel)
-            continue
-        text = p.read_text(encoding="utf-8", errors="ignore")
-        reasons = third_party_reasons(rel, text, tokens)
-        if reasons:
-            skipped.append((rel, "；".join(reasons)))
-            continue
-        if scrub:
-            file_lines, st = scrub_code(text, tokens)
-            stats["headers"] += st["header"]
-            stats["dropped"] += st["dropped"]
-        else:
-            file_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-        if trim_comments:
-            file_lines, removed = strip_comments(file_lines, rel)
-            stats["comments"] += removed
-        if trim_imports:
-            file_lines, removed = strip_imports(file_lines, rel)
-            stats["imports"] += removed
-        before_compact = len(file_lines)
-        file_lines = compact_blank_lines(file_lines, max_blank_lines)
-        stats["blank_lines"] += max(0, before_compact - len(file_lines))
-        for line in file_lines:
-            line = line.replace("\t", "  ")
-            lines.append(redact_line(line) if redact else line)
-    return lines, missing, skipped, stats
-
-
 def add_page(doc, page_lines, lines_per_page, font_size_pt, row_height_pt):
     table = doc.add_table(rows=lines_per_page, cols=1)
     table.autofit = False
@@ -118,33 +82,25 @@ def add_page(doc, page_lines, lines_per_page, font_size_pt, row_height_pt):
 def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_keep_imports=False):
     lines_per_page = int(project.get("lines_per_page", 90))
     pages = int(project.get("source_pages", 60))
-    front_pages = pages // 2
-    back_pages = pages - front_pages
     font_size = float(project.get("source_font_size", 6.5))
     row_height = float(project.get("source_row_height", 8.15))
+    collected = collect_source_material(repo, project, tokens, cli_keep_comments, cli_keep_imports)
+    lines = collected["lines"]
+    selected = collected["selected"]
+    missing = collected["missing"]
+    skipped = collected["skipped"]
+    scrub_stats = collected["stats"]
     redact = project.get("redact", True)
     scrub = project.get("scrub_open_source", True)
-    source_material = project.get("source_material", {}) or {}
-    if not isinstance(source_material, dict):
-        source_material = {}
-    trim_comments = bool(source_material.get("trim_comments", project.get("trim_comments", True))) and not cli_keep_comments
-    trim_imports = bool(source_material.get("trim_imports", project.get("trim_imports", True))) and not cli_keep_imports
-    max_blank_lines = int(source_material.get("max_blank_lines", 1))
-    max_blank_lines = max(0, min(max_blank_lines, 3))
-    lines, missing, skipped, scrub_stats = read_lines(
-        repo, project.get("source_files", []), redact, tokens, scrub,
-        trim_comments, trim_imports, max_blank_lines,
-    )
+    trim_comments = collected["trim_comments"]
+    trim_imports = collected["trim_imports"]
+    max_blank_lines = collected["max_blank_lines"]
     need = pages * lines_per_page
     if skipped:
         print(f"[{project['name']}] 跳过 {len(skipped)} 个第三方文件：" + "、".join(r for r, _ in skipped), file=sys.stderr)
     if len(lines) < need:
         print(f"[{project['name']}] 警告：可用代码 {len(lines)} 行，不足 {need} 行（{pages} 页），请补充自研文件",
               file=sys.stderr)
-    selected = lines[: front_pages * lines_per_page] + lines[-back_pages * lines_per_page :]
-    while len(selected) < pages * lines_per_page:
-        selected.append("")
-
     doc = Document()
     section = doc.sections[0]
     section.page_width = Cm(21)
@@ -162,11 +118,18 @@ def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_k
 
     out_dir = out_root / project["id"] / "源程序提取"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"源程序鉴别材料-{pages}页.docx"
+    out_path = out_dir / source_material_docx_name(project)
     doc.save(out_path)
+    html_path = out_dir / source_material_html_name(project)
+    html_path.write_text(
+        # 共享同一批 selected 行，确保 DOCX 与 Chromium PDF 内容一致。
+        build_source_html(project, selected, pages, lines_per_page),
+        encoding="utf-8",
+    )
     (out_dir / "源程序DOCX生成报告.md").write_text(
         f"# {project['name']} 源程序 DOCX 生成报告\n\n"
         f"- 输出文件：`{out_path.name}`\n"
+        f"- Chromium PDF 输入：`{html_path.name}`\n"
         f"- 页面方向：竖向 A4\n"
         f"- 页数：{pages}\n"
         f"- 每页代码行数：{lines_per_page}\n"

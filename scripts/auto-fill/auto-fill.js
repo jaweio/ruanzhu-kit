@@ -41,6 +41,16 @@ for (const [section, fields] of Object.entries(cfg)) {
     if (typeof v === 'string' && /【[^】]*】/.test(v)) problems.push(`${section}.${k} = ${v}`);
   }
 }
+// 缺失字段一律为空串（生成器不写占位符），空值同样拒绝填表
+// The R11 copyright-holder field is readonly and supplied by the logged-in
+// account.  An empty local baseline is intentional; the confirmation page is
+// where the account value is checked.
+const OPTIONAL = new Set(['languageOther', 'copyrightHolder']);
+for (const section of ['step2_basic', 'step3_dev', 'step4_features']) {
+  for (const [k, v] of Object.entries(cfg[section] || {})) {
+    if (typeof v === 'string' && !v.trim() && !OPTIONAL.has(k)) problems.push(`${section}.${k} 未填写`);
+  }
+}
 const mainFn = cfg.step4_features?.mainFunction ?? '';
 const mainLen = mainFn.replace(/\s/g, '').length;
 if (mainLen < 500 || mainLen > 1300) problems.push(`step4_features.mainFunction 为 ${mainLen} 字，官网要求 500-1300 字`);
@@ -110,6 +120,82 @@ async function clickBtn(page, text, timeout = 10000) {
 
 async function waitFor(page, text, timeout = 20000) {
   await page.locator(`text=${text}`).first().waitFor({ timeout });
+}
+
+async function hasText(page, text) {
+  return (await page.locator(`text=${text}`).count()) > 0;
+}
+
+async function clickChoice(page, text) {
+  const button = page.locator(`button:has-text("${text}")`).first();
+  if (await button.count()) {
+    try {
+      await button.click();
+      return;
+    } catch (_) {
+      // 组件可能把选项渲染为不可见 button，继续用可见文本定位。
+    }
+  }
+  await page.locator(`text=${text}`).first().click();
+}
+
+/**
+ * R11 当前页面的上传卡片会触发 filechooser；优先点击可见说明文字，
+ * 失败时才回退到 setInputFiles（不强制点击隐藏 input）。
+ */
+async function uploadPdf(page, label, filePath, fallbackIndex) {
+  const fileName = path.basename(filePath);
+  let chooserPromise;
+  let uploadedByChooser = false;
+
+  try {
+    chooserPromise = page.waitForEvent('filechooser', { timeout: 10000 });
+    await page.locator(`text=${label}`).first().click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles(filePath);
+    uploadedByChooser = true;
+  } catch (err) {
+    // click/chooser 失败时消化 pending promise，避免留下未处理的 rejection。
+    if (chooserPromise) await chooserPromise.catch(() => {});
+  }
+
+  if (!uploadedByChooser) {
+    const inputs = page.locator('input[type="file"]');
+    const count = await inputs.count();
+    if (fallbackIndex == null || count <= fallbackIndex) {
+      throw new Error(`找不到 ${label} 的文件上传控件`);
+    }
+    await inputs.nth(fallbackIndex).setInputFiles(filePath);
+  }
+
+  // 页面可能先显示上传中，必须等到文件名真正出现在卡片中。
+  await page.locator(`text=${fileName}`).first().waitFor({ timeout: 20000 });
+  console.log(`   ✅ ${fileName} 已显示上传完成`);
+}
+
+async function verifyConfirmation(page, cfg) {
+  const s2 = cfg.step2_basic || {};
+  const s3 = cfg.step3_dev || {};
+  const s4 = cfg.step4_features || {};
+  const holder = typeof s2.copyrightHolder === 'string' ? s2.copyrightHolder : null;
+  const checks = [
+    ['软件全称', s2.softwareName],
+    ['软件简称', s2.shortName],
+    ['版本号', s2.version],
+    ['软件分类', s2.category],
+    ['开发完成日期', s2.completionDate],
+    ['发表状态', s2.published === false ? '未发表' : null],
+    ['著作权人', holder],
+    ['源程序量', s3.sourceLines],
+    ['程序鉴别材料', s4.programPdf ? path.basename(absPath(s4.programPdf)) : null],
+    ['文档鉴别材料', s4.docPdf ? path.basename(absPath(s4.docPdf)) : null],
+  ];
+
+  for (const [label, value] of checks) {
+    if (!value) continue;
+    await page.locator(`text=${value}`).first().waitFor({ timeout: 10000 });
+    console.log(`   ✓ 已回读${label}`);
+  }
 }
 
 // ── 主流程 ───────────────────────────────────────────────────────────────────
@@ -200,33 +286,78 @@ async function waitFor(page, text, timeout = 20000) {
   // 通常系统会自动带入，无需手动填写
 
   await clickBtn(page, '下一步');
-  await waitFor(page, '软件开发信息');
-  console.log('   ✅ 完成\n');
 
-  // ── Step 3: 软件开发信息 ──────────────────────────────────────────────────
-  console.log('📋 Step 3: 软件开发信息');
+  // 新版 R11 将开发环境、主要功能、技术特点和材料上传合并到 features 页；
+  // 旧版仍可能拆成 development → features，两种结构都支持。
   const s3 = cfg.step3_dev;
+  const s4 = cfg.step4_features;
 
-  // textarea 顺序由页面决定，通过逐个 focus 确保准确
-  const taMap = [
-    [0, s3.devHardware,   '开发硬件环境'],
-    [1, s3.runHardware,   '运行硬件环境'],
-    [2, s3.devOS,         '开发操作系统'],
-    [3, s3.devTools,      '开发工具'],
-    [4, s3.runOS,         '运行平台/OS'],
-    [5, s3.runSupport,    '运行支撑环境'],
-  ];
-  for (const [idx, val, name] of taMap) {
-    await fillTA(page, idx, val);
-    console.log(`   ・${name}: ${val.substring(0, 30)}...`);
+  const combinedFeatures = await hasText(page, '开发的硬件环境') &&
+    await hasText(page, '软件的主要功能');
+
+  if (combinedFeatures) {
+    console.log('📋 Step 3/4: 软件开发信息与功能特点（合并页）');
+    const combinedMap = [
+      [0, s3.devHardware,   '开发硬件环境'],
+      [1, s3.runHardware,   '运行硬件环境'],
+      [2, s3.devOS,         '开发操作系统'],
+      [3, s3.devTools,      '开发工具'],
+      [4, s3.runOS,         '运行平台/OS'],
+      [5, s3.runSupport,    '运行支撑环境'],
+      [6, s3.languageOther, '其他编程语言'],
+      [7, s4.devPurpose,    '开发目的'],
+      [8, s4.targetIndustry,'面向领域'],
+      [9, s4.mainFunction,  '主要功能'],
+      [10, s4.techFeatureText,'技术特点'],
+    ];
+    for (const [idx, val, name] of combinedMap) {
+      await fillTA(page, idx, val);
+      console.log(`   ・${name}: ${String(val).substring(0, 30)}...`);
+    }
+    await clickChoice(page, s3.language);
+    await page.waitForTimeout(300);
+    await clickChoice(page, s4.techFeatureTag);
+    await page.waitForTimeout(300);
+  } else {
+    console.log('📋 Step 3: 软件开发信息');
+    await waitFor(page, '软件开发信息');
+    const taMap = [
+      [0, s3.devHardware,   '开发硬件环境'],
+      [1, s3.runHardware,   '运行硬件环境'],
+      [2, s3.devOS,         '开发操作系统'],
+      [3, s3.devTools,      '开发工具'],
+      [4, s3.runOS,         '运行平台/OS'],
+      [5, s3.runSupport,    '运行支撑环境'],
+    ];
+    for (const [idx, val, name] of taMap) {
+      await fillTA(page, idx, val);
+      console.log(`   ・${name}: ${val.substring(0, 30)}...`);
+    }
+    await clickChoice(page, s3.language);
+    await page.waitForTimeout(300);
+    await fillTA(page, 6, s3.languageOther);
+    await page.evaluate((lines) => {
+      const inp = Array.from(document.querySelectorAll('input'))
+        .find(i => i.placeholder?.includes('请输入') && i.type !== 'hidden');
+      if (inp) {
+        inp.focus(); inp.select();
+        document.execCommand('selectAll');
+        document.execCommand('insertText', false, lines);
+      }
+    }, s3.sourceLines);
+
+    await clickBtn(page, '下一步');
+    await waitFor(page, '软件功能与特点');
+    console.log('📋 Step 4: 软件功能与特点');
+    await fillTA(page, 0, s4.devPurpose);
+    await fillTA(page, 1, s4.targetIndustry);
+    await fillTA(page, 2, s4.mainFunction);
+    await clickChoice(page, s4.techFeatureTag);
+    await page.waitForTimeout(300);
+    await fillTA(page, 3, s4.techFeatureText);
   }
 
-  // 编程语言勾选
-  await page.locator(`button:has-text("${s3.language}")`).first().click();
-  await page.waitForTimeout(300);
-  await fillTA(page, 6, s3.languageOther);
-
-  // 源程序量（number input）
+  // 源程序量在合并页与旧版开发页都用同一套清空后填入逻辑。
   await page.evaluate((lines) => {
     const inp = Array.from(document.querySelectorAll('input'))
       .find(i => i.placeholder?.includes('请输入') && i.type !== 'hidden');
@@ -236,29 +367,7 @@ async function waitFor(page, text, timeout = 20000) {
       document.execCommand('insertText', false, lines);
     }
   }, s3.sourceLines);
-
-  await clickBtn(page, '下一步');
-  await waitFor(page, '软件功能与特点');
-  console.log('   ✅ 完成\n');
-
-  // ── Step 4: 软件功能与特点 ────────────────────────────────────────────────
-  console.log('📋 Step 4: 软件功能与特点');
-  const s4 = cfg.step4_features;
-
-  await fillTA(page, 0, s4.devPurpose);
-  console.log(`   ・开发目的: ${s4.devPurpose}`);
-
-  await fillTA(page, 1, s4.targetIndustry);
-  console.log(`   ・面向领域: ${s4.targetIndustry}`);
-
-  await fillTA(page, 2, s4.mainFunction);
-  console.log(`   ・主要功能: ${s4.mainFunction.length} 字`);
-
-  // 技术特点标签
-  await page.locator(`button:has-text("${s4.techFeatureTag}")`).first().click();
-  await page.waitForTimeout(300);
-  await fillTA(page, 3, s4.techFeatureText);
-  console.log(`   ・技术特点: ${s4.techFeatureText}`);
+  console.log(`   ・源程序量: ${s3.sourceLines}`);
 
   // 上传程序鉴别材料
   const programPdf = absPath(s4.programPdf);
@@ -274,13 +383,10 @@ async function waitFor(page, text, timeout = 20000) {
   }
 
   console.log('   📎 上传程序鉴别材料 PDF...');
-  const fileInputs = page.locator('input[type="file"]');
-  await fileInputs.nth(0).setInputFiles(programPdf);
-  await page.waitForTimeout(2500);
+  await uploadPdf(page, '源程序前连续的30页和后连续的30页', programPdf, 0);
 
   console.log('   📎 上传文档鉴别材料 PDF...');
-  await fileInputs.nth(1).setInputFiles(docPdf);
-  await page.waitForTimeout(2500);
+  await uploadPdf(page, '提交任何一种文档的前连续的30页和后连续的30页', docPdf, 1);
 
   await clickBtn(page, '下一步');
   await waitFor(page, '确认信息');
@@ -290,8 +396,11 @@ async function waitFor(page, text, timeout = 20000) {
   console.log('📋 Step 5: 确认信息 → 保存至草稿箱');
   await page.waitForTimeout(2000); // 等确认页完全渲染
 
+  await verifyConfirmation(page, cfg);
+
   const saveBtn = page.locator('button:has-text("保存至草稿箱")');
   await saveBtn.waitFor({ timeout: 10000 });
+  const beforeSaveUrl = page.url();
   await saveBtn.click();
 
   // 等待保存完成（加载动画出现→消失）
@@ -299,7 +408,8 @@ async function waitFor(page, text, timeout = 20000) {
   await page.locator('text=保存中').waitFor({ state: 'hidden',  timeout: 20000 }).catch(() => {});
 
   await page.waitForTimeout(1000);
-  console.log('\n🎉 草稿已保存（脚本到此为止，不会提交）。');
+  console.log(`\n🎉 已点击保存至草稿箱（当前页面：${page.url()}；保存前：${beforeSaveUrl}）。`);
+  console.log('   脚本到此为止，不会点击「确认填报」或「提交申请」。');
   console.log('   请在浏览器中逐项核对确认信息：软件全称、版本号、著作权人、开发完成日期、');
   console.log('   源程序量、两份 PDF 是否正确，无误后【人工点击「确认填报」】正式提交。\n');
 

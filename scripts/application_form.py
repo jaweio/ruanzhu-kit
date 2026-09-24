@@ -7,14 +7,15 @@ R11 申请表的字段散在 config、说明书、源码统计里，手工誊抄
 
 字段来源：
   软件全称/简称/版本/分类  ← ruanzhu.config.json 的 projects[]
-  著作权人/开发完成日期/发表状态 ← ruanzhu.config.json 顶层（发表状态默认“未发表”）
+    开发完成日期/发表状态 ← ruanzhu.config.json 顶层（发表状态默认“未发表”）
+    著作权人                ← 版权中心登录账户；只在页面回读，不要求本地重复填写
   源程序量                ← 说明书素材.json 的全项目源码行数（不是取材行数）
   编程语言                ← 说明书素材.json 的 by_ext 统计
   开发/运行环境           ← ruanzhu.config.json 的 env 字段，缺了就留占位并在校验里报出来
   软件主要功能            ← 说明书“功能模块”章节，按模块拼成 500–1300 字初稿
   两份 PDF                ← 材料目录里实际存在的文件
 
-脚本不编造：拿不到的字段写【待填写：…】，并在校验清单里列为待办。
+脚本不编造：拿不到的字段留空，不写任何占位符；缺什么只在校验清单里列出。
 
 用法：
   python3 application_form.py --config soft-copyright-materials/ruanzhu.config.json
@@ -29,7 +30,7 @@ from pathlib import Path
 
 LIMITS = {  # 官网字段长度上限（mainFunction 为区间）
     "softwareName": 60, "shortName": 15, "version": 20, "devTools": 50, "devOS": 50, "runOS": 50,
-    "devHardware": 100, "runHardware": 100, "runSupport": 50, "languageOther": 50,
+    "devHardware": 50, "runHardware": 50, "runSupport": 50, "languageOther": 50,
     "devPurpose": 50, "targetIndustry": 50, "techFeatureText": 100,
 }
 MAIN_MIN, MAIN_MAX = 500, 1300
@@ -40,10 +41,22 @@ EXT_LANG = {
     ".dart": "Dart", ".rb": "Ruby", ".sql": "SQL", ".wxml": "JavaScript", ".scss": "CSS", ".less": "CSS", ".css": "CSS",
 }
 PLACEHOLDER = re.compile(r"【[^】]*】")
+MISSING_FACT = re.compile(r"^\s*(?:待确认|待填写|待补充|待核验)(?:\s*[（(].*)?\s*$")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from output_names import (manual_pdf_name, source_material_pdf_name,
+                          submission_dir, submission_form_path)  # noqa: E402
+from environment_profile import resolve_environment  # noqa: E402
 
 
 def chars(s):
     return len(re.sub(r"\s", "", str(s or "")))
+
+
+def fact(value):
+    """Normalize legacy config prompts to an empty value before export."""
+    text = str(value or "").strip()
+    return "" if MISSING_FACT.fullmatch(text) else text
 
 
 def load(path, default=None):
@@ -56,14 +69,14 @@ def load(path, default=None):
 def languages(spec):
     """按行数排序的语言清单：主语言 + 其他。"""
     if not spec:
-        return "【待填写：主要编程语言】", ""
+        return "", ""
     agg = {}
     for ext, n in spec["stats"].get("by_ext", {}).items():
         lang = EXT_LANG.get(ext)
         if lang:
             agg[lang] = agg.get(lang, 0) + n
     ranked = [l for l, _ in sorted(agg.items(), key=lambda x: -x[1])]
-    return (ranked[0] if ranked else "【待填写：主要编程语言】"), "、".join(ranked[1:4])
+    return (ranked[0] if ranked else ""), "、".join(ranked[1:4])
 
 
 def main_function_draft(manual_md, project):
@@ -92,15 +105,24 @@ def main_function_draft(manual_md, project):
 
 def build(cfg, project, root, spec, args):
     d = root / project["id"]
-    env = {**cfg.get("env", {}), **project.get("env", {})}
+    env, env_sources = resolve_environment(project, cfg, spec)
     lang, lang_other = languages(spec)
-    src_pdf = sorted((d / "源程序提取").glob("源程序鉴别材料-*.pdf"))
-    doc_pdf = next((p for p in [d / "软件说明书.pdf", d / "软件文档.pdf"] if p.exists()), None)
+    source_dir = d / "源程序提取"
+    final_dir = submission_dir(d)
+    new_src_pdf = final_dir / source_material_pdf_name(project)
+    legacy_src_pdf = source_dir / source_material_pdf_name(project)
+    legacy_src = sorted(source_dir.glob("*源程序鉴别材料-*.pdf"))
+    src_pdf = ([new_src_pdf] if new_src_pdf.exists() else
+               ([legacy_src_pdf] if legacy_src_pdf.exists() else [])) + legacy_src
+    doc_candidates = [final_dir / manual_pdf_name(project), d / manual_pdf_name(project),
+                      d / "软件说明书.pdf", d / "软件文档.pdf"]
+    doc_pdf = next((p for p in doc_candidates if p.exists()), None)
     main_fn = project.get("main_function") or main_function_draft(d / "软件说明书.md", project)
 
     return {
         "_source": "application_form.py 生成，勿手工改；改 ruanzhu.config.json 后重跑",
         "_project": project["id"],
+        "_environmentSources": env_sources,
         "step1_identity": {
             "applicantRole": cfg.get("applicant_role", "我是申请人"),
             "applicantType": cfg.get("applicant_type", "企业法人"),
@@ -112,31 +134,53 @@ def build(cfg, project, root, spec, args):
             "shortName": project.get("short_name", project["name"][:15]),
             "version": project.get("version", "V1.0"),
             "category": project.get("category", "应用软件"),
-            "completionDate": cfg.get("development_completed_date", "【待填写：开发完成日期 YYYY-MM-DD】"),
+            "completionDate": fact(cfg.get("development_completed_date", "")),
             "published": False,
-            "copyrightHolder": cfg.get("copyright_holder", "【待填写：著作权人全称】"),
+            "copyrightHolder": fact(cfg.get("copyright_holder", "")),
         },
         "step3_dev": {
-            "devHardware": env.get("dev_hardware", "【待填写：开发硬件环境】"),
-            "runHardware": env.get("run_hardware", "【待填写：运行硬件环境】"),
-            "devOS": env.get("dev_os", "【待填写：开发操作系统】"),
-            "devTools": env.get("dev_tools", "【待填写：开发工具，写 IDE/编译器/构建工具，不写框架名】"),
-            "runOS": env.get("run_os", "【待填写：运行操作系统】"),
-            "runSupport": env.get("run_support", "【待填写：运行支撑环境】"),
+            "devHardware": fact(env.get("dev_hardware", "")),
+            "runHardware": fact(env.get("run_hardware", "")),
+            "devOS": fact(env.get("dev_os", "")),
+            "devTools": fact(env.get("dev_tools", "")),
+            "runOS": fact(env.get("run_os", "")),
+            "runSupport": fact(env.get("run_support", "")),
             "language": lang,
             "languageOther": lang_other,
-            "sourceLines": str(spec["stats"]["source_lines"]) if spec else "【待填写：全项目源码行数】",
+            "sourceLines": str(spec["stats"]["source_lines"]) if spec else "",
         },
         "step4_features": {
-            "devPurpose": project.get("dev_purpose", "【待填写：开发目的，50 字内】"),
-            "targetIndustry": project.get("target_industry", "【待填写：面向领域/行业，50 字内】"),
-            "mainFunction": main_fn or "【待填写：软件主要功能，500-1300 字】",
+            "devPurpose": fact(project.get("dev_purpose", "")),
+            "targetIndustry": fact(project.get("target_industry", "")),
+            "mainFunction": main_fn or "",
             "techFeatureTag": project.get("tech_feature_tag", "应用软件"),
-            "techFeatureText": project.get("tech_feature_text", "【待填写：技术特点关键词，100 字内】"),
-            "programPdf": f"../源程序提取/{src_pdf[0].name}" if src_pdf else "【待生成：源程序鉴别材料 PDF】",
-            "docPdf": f"../{doc_pdf.name}" if doc_pdf else "【待生成：说明书 PDF】",
+            "techFeatureText": fact(project.get("tech_feature_text", "")),
+            "programPdf": (submission_form_path(src_pdf[0].name)
+                           if src_pdf and src_pdf[0].parent == final_dir
+                           else (f"../源程序提取/{src_pdf[0].name}" if src_pdf else "")),
+            "docPdf": (submission_form_path(doc_pdf.name)
+                       if doc_pdf and doc_pdf.parent == final_dir
+                       else (f"../{doc_pdf.name}" if doc_pdf else "")),
         },
     }
+
+
+# 缺失时告诉用户去改哪个配置键；值为空即“未填写”，不再用占位文字表示
+REQUIRED = {
+    # copyrightHolder is readonly on R11 and comes from the logged-in account.
+    # It is checked after the page is loaded, not treated as a local required
+    # config value.
+    "completionDate": "development_completed_date",
+    "devHardware": "projects[].environment_profile.development.hardware 或 env.dev_hardware",
+    "runHardware": "projects[].environment_profile.runtime.hardware 或 env.run_hardware",
+    "devOS": "projects[].environment_profile.development.operating_systems 或 env.dev_os",
+    "devTools": "项目清单 / go.mod，或 projects[].environment_profile.development.tools",
+    "runOS": "projects[].environment_profile.runtime.operating_systems 或 env.run_os",
+    "runSupport": "projects[].tech_stack 或 projects[].environment_profile.runtime.support_software",
+    "language": "重跑 manual_spec.py 统计语言", "sourceLines": "重跑 manual_spec.py 统计源码行数",
+    "devPurpose": "projects[].dev_purpose", "targetIndustry": "projects[].target_industry",
+    "techFeatureText": "projects[].tech_feature_text",
+}
 
 
 def validate(form, d, spec):
@@ -146,9 +190,12 @@ def validate(form, d, spec):
         issues.append({"level": level, "field": field, "msg": msg, "how": how})
 
     flat = {k: v for sec in form.values() if isinstance(sec, dict) for k, v in sec.items()}
+    for field, key in REQUIRED.items():
+        if not str(flat.get(field) or "").strip():
+            add("high", field, "未填写", f"在 ruanzhu.config.json 配置 `{key}` 后重跑" if "." in key or "_" in key else key)
     for field, val in flat.items():
         if isinstance(val, str) and PLACEHOLDER.search(val):
-            add("high", field, "未填写", PLACEHOLDER.search(val).group(0))
+            add("high", field, "含占位文字", f"删除“{PLACEHOLDER.search(val).group(0)}”，填真实值")
     for field, limit in LIMITS.items():
         val = flat.get(field, "")
         if isinstance(val, str) and not PLACEHOLDER.search(val) and chars(val) > limit:
@@ -162,13 +209,13 @@ def validate(form, d, spec):
         elif n > MAIN_MAX:
             add("high", "mainFunction", f"{n} 字，超过 {MAIN_MAX} 字", "删减次要模块")
     date = flat.get("completionDate", "")
-    if not PLACEHOLDER.search(date) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+    if date and not PLACEHOLDER.search(date) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
         add("high", "completionDate", f"日期格式应为 YYYY-MM-DD，当前“{date}”", "改 ruanzhu.config.json")
     if flat.get("published") is not False:
         add("medium", "published", "发表状态不是“未发表”", "确认后再改；默认按未发表申报")
     for field in ("programPdf", "docPdf"):
         val = flat.get(field, "")
-        if PLACEHOLDER.search(val):
+        if not val or PLACEHOLDER.search(val):
             add("high", field, "PDF 未生成", "先跑 generate_source_docx.py / render_pdfs.py")
         elif not (d / "auto-fill" / val).resolve().exists():
             add("high", field, f"路径找不到文件：{val}", "确认材料目录结构")
@@ -184,27 +231,28 @@ def validate(form, d, spec):
 
 def copy_md(form, issues, project):
     s2, s3, s4 = form["step2_basic"], form["step3_dev"], form["step4_features"]
+    holder = s2["copyrightHolder"] or "由登录版权中心账号带入（填表后回读核对）"
     rows = [["软件全称", s2["softwareName"]], ["软件简称", s2["shortName"]], ["版本号", s2["version"]],
-            ["软件分类", s2["category"]], ["著作权人", s2["copyrightHolder"]],
+            ["软件分类", s2["category"]], ["著作权人", holder],
             ["开发完成日期", s2["completionDate"]], ["发表状态", "未发表" if s2["published"] is False else "已发表"],
             ["权利取得方式", form["step1_identity"]["acquireType"]], ["开发方式", form["step1_identity"]["developType"]],
             ["开发硬件环境", s3["devHardware"]], ["运行硬件环境", s3["runHardware"]],
             ["开发操作系统", s3["devOS"]], ["开发工具", s3["devTools"]],
             ["运行操作系统", s3["runOS"]], ["运行支撑环境", s3["runSupport"]],
             ["编程语言", s3["language"] + (f"（其他：{s3['languageOther']}）" if s3["languageOther"] else "")],
-            ["源程序量", f"{s3['sourceLines']} 行（全项目源码行数）"],
+            ["源程序量", f"{s3['sourceLines']} 行（全项目源码行数）" if s3["sourceLines"] else ""],
             ["开发目的", s4["devPurpose"]], ["面向领域", s4["targetIndustry"]],
             ["技术特点标签", s4["techFeatureTag"]], ["技术特点", s4["techFeatureText"]]]
     out = [f"# {project['name']} {s2['version']} 申请表填报文案", "",
            "> 由 application_form.py 生成，与 `auto-fill/config.json` 同源；官网填报时对照本表复制。", "",
            "| 字段 | 填写内容 |", "| --- | --- |"]
-    out += [f"| {k} | {v} |" for k, v in rows]
+    out += [f"| {k} | {v} |" for k, v in rows if str(v or "").strip()]
     out += ["", f"## 软件主要功能（{chars(s4['mainFunction'])} 字，官网要求 {MAIN_MIN}–{MAIN_MAX} 字）", "",
             s4["mainFunction"], "",
             "## 上传材料", "",
             f"- 程序鉴别材料：`{s4['programPdf']}`", f"- 文档鉴别材料：`{s4['docPdf']}`", ""]
     if issues:
-        out += ["## 待处理", "", "| 级别 | 字段 | 问题 | 怎么办 |", "| --- | --- | --- | --- |"]
+        out += ["## 校验未通过", "", "| 级别 | 字段 | 问题 | 怎么办 |", "| --- | --- | --- | --- |"]
         out += [f"| {i['level']} | `{i['field']}` | {i['msg']} | {i['how']} |" for i in issues]
     else:
         out += ["## 校验", "", "全部字段通过校验，可运行 `node auto-fill/auto-fill.js` 自动填表并保存草稿。"]
@@ -235,7 +283,7 @@ def main():
         high = sum(1 for i in issues if i["level"] == "high")
         bad += high
         print(f"{project['name']}：主要功能 {chars(form['step4_features']['mainFunction'])} 字，"
-              f"待处理 {len(issues)} 项（高 {high}）→ {d / 'auto-fill' / 'config.json'}")
+              f"校验问题 {len(issues)} 项（高 {high}）→ {d / 'auto-fill' / 'config.json'}")
         for i in issues[:8]:
             print(f"   [{i['level']}] {i['field']}：{i['msg']} —— {i['how']}")
     if args.strict and bad:

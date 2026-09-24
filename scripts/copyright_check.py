@@ -27,10 +27,22 @@ import json
 import re
 import subprocess
 import sys
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from output_names import (manual_pdf_name, source_material_docx_name,
+                          source_material_pdf_name, submission_dir)  # noqa: E402
+from artifact_manifest import formal_material_paths  # noqa: E402
+
+MISSING_FACT = re.compile(r"^\s*(?:待确认|待填写|待补充|待核验)(?:\s*[（(].*)?\s*$")
+
+
+def configured_fact(value):
+    """Return an actual configured fact, not an old config prompt."""
+    text = str(value or "").strip()
+    return "" if MISSING_FACT.fullmatch(text) else text
 
 SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
 SEV_CN = {"high": "高", "medium": "中", "low": "低"}
@@ -78,8 +90,10 @@ SECRETS = [
     ("阿里云 AccessKey", r"\bLTAI[0-9A-Za-z]{12,24}\b"),
     ("私钥", r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"),
     ("JWT", r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
-    ("硬编码口令/密钥", r"(?i)\b(?:password|passwd|pwd|secret|api_?key|access_?token|app_?secret)\b\s*[:=]\s*['\"][^'\"\s]{6,}['\"]"),
-    ("微信 AppSecret", r"(?i)appsecret['\"]?\s*[:=]\s*['\"][0-9a-f]{32}['\"]"),
+    # 下面两条匹配整个赋值语句，密钥本身放在具名组 v 里：脱敏只替换 v，保留标识符和赋值号。
+    # 用字母边界而不是 \b：DB_PASSWORD / MYSQL_ROOT_PASSWORD 这类下划线命名在 \b 下会漏检。
+    ("硬编码口令/密钥", r"(?i)(?<![A-Za-z])(?:password|passwd|pwd|secret|api_?key|access_?token|app_?secret)(?![A-Za-z])\s*[:=]\s*['\"](?P<v>[^'\"\s]{6,})['\"]"),
+    ("微信 AppSecret", r"(?i)appsecret['\"]?\s*[:=]\s*['\"](?P<v>[0-9a-f]{32})['\"]"),
 ]
 PII = [
     ("手机号", r"(?<!\d)1[3-9]\d{9}(?!\d)"),
@@ -120,10 +134,41 @@ SCAFFOLDS = [(n, re.compile(p, re.I)) for n, p in SCAFFOLDS]
 LICENSE_FILES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "COPYING", "COPYING.md", "NOTICE", "NOTICE.md")
 
 
+def _value_span(m):
+    """密钥值在整段匹配中的位置；模式没有具名组 v 时即整段匹配。"""
+    if "v" in m.re.groupindex and m.group("v") is not None:
+        return m.span("v")
+    return m.span(0)
+
+
+def _mask_secret(m):
+    """裸令牌保留 4 位方案前缀（AKIA/ghp_ 之类），赋值语句只替换引号内的值。"""
+    whole, (start, end) = m.group(0), _value_span(m)
+    if (start, end) == m.span(0):
+        return whole[:4] + "****"
+    base = m.start(0)
+    return whole[:start - base] + "****" + whole[end - base:]
+
+
+def secret_hits(text):
+    """按位置合并重叠匹配：同一处密钥常同时命中多条规则，只应算一处。"""
+    raw = sorted((_value_span(m), name)
+                 for name, pat in SECRETS for m in re.finditer(pat, text))
+    merged = []
+    for (start, end), name in raw:
+        if merged and start < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+            if name not in merged[-1][2]:
+                merged[-1][2].append(name)
+        else:
+            merged.append([start, end, [name]])
+    return [(start, end, names) for start, end, names in merged]
+
+
 def redact_line(line):
     """提取源程序时对自有代码脱敏：只处理密钥与个人信息，不动许可证/版权文字。"""
     for _, pat in SECRETS:
-        line = re.sub(pat, lambda m: m.group(0)[:4] + "****", line)
+        line = re.sub(pat, _mask_secret, line)
     for name, pat in PII:
         def mask(m, name=name):
             s = m.group(0)
@@ -351,10 +396,11 @@ def check_sources(repo, cfg, F):
             if AI_MARK.search(line):
                 F.add("medium", "取材", loc, "AI 生成标记", line.strip()[:80],
                       "如实评估人工修改程度；材料中不宜保留该注释的同时声称全部独立手写")
-            for name, pat in SECRETS:
-                if re.search(pat, line):
-                    F.add("high", "取材", loc, f"敏感信息：{name}", mask(line.strip()[:80]),
-                          "立即轮换该密钥；提取时自动脱敏（generate_source_docx.py 默认开启）")
+            for _start, _end, names in secret_hits(line):
+                # 先脱敏再做显示截断：mask() 只缩短长标识符，单用会把口令前 4 位写进报告。
+                F.add("high", "取材", loc, f"敏感信息：{'／'.join(names)}",
+                      mask(redact_line(line.strip())[:80]),
+                      "立即轮换该密钥；提取时自动脱敏（generate_source_docx.py 默认开启）")
             for name, pat in PII:
                 for m in re.finditer(pat, line):
                     if not PII_ALLOW.search(m.group(0)):
@@ -395,17 +441,41 @@ def material_text(p):
     return p.read_text(encoding="utf-8", errors="ignore")
 
 
+def _contains_material_value(text, value):
+    """PDF 文本提取可能插入空格或兼容字符，匹配时做 NFKC + 空白归一化。"""
+    normalize = lambda s: re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(s))).casefold()
+    return normalize(value) in normalize(text)
+
+
 def check_materials(root, cfg, F):
-    holder = cfg.get("copyright_holder", "")
+    holder = configured_fact(cfg.get("copyright_holder", ""))
     for proj in cfg.get("projects", []):
         d = root / proj["id"]
         if not d.exists():
             continue
-        files = [d / "软件说明书.md", d / "申请表填报文案.md", d / "auto-fill" / "config.json",
-                 d / "软件说明书.pdf", d / "软件文档.pdf"]
-        files += sorted((d / "源程序提取").glob("源程序鉴别材料-*.pdf")) if (d / "源程序提取").exists() else []
-        files += sorted((d / "源程序提取").glob("源程序鉴别材料-*.docx")) if (d / "源程序提取").exists() else []
+        source_dir = d / "源程序提取"
+        final_dir = submission_dir(d)
+        # 有正式材料清单时只检查清单列出的提交件，避免旧版/兼容目录污染结果。
+        # 清单尚未生成时保留旧版兼容扫描，保证 Step 5（生成清单之前）仍可预检。
+        formal = formal_material_paths(d)
+        if formal:
+            files = [d / "软件说明书.md", d / "申请表填报文案.md", d / "auto-fill" / "config.json"]
+            role_by_path = {}
+            for role, path in formal.items():
+                files.append(path)
+                role_by_path[path.absolute()] = role
+        else:
+            files = [d / "软件说明书.md", d / "申请表填报文案.md", d / "auto-fill" / "config.json",
+                     final_dir / manual_pdf_name(proj), d / manual_pdf_name(proj),
+                     d / "软件说明书.pdf", d / "软件文档.pdf"]
+            files += [final_dir / source_material_pdf_name(proj),
+                      source_dir / source_material_pdf_name(proj),
+                      source_dir / source_material_docx_name(proj)]
+            files += sorted(source_dir.glob("*源程序鉴别材料-*.pdf")) if source_dir.exists() else []
+            files += sorted(source_dir.glob("*源程序鉴别材料-*.docx")) if source_dir.exists() else []
+            role_by_path = {}
         seen_text = {}
+        seen_source = {}
         for f in files:
             if not f.exists():
                 continue
@@ -415,8 +485,13 @@ def check_materials(root, cfg, F):
                 F.add("low", "产出", str(f), "无法读取", str(e), "安装 pypdf 后重试")
                 continue
             seen_text[f.name] = text
-            rel = f.relative_to(root)
-            is_source = "源程序" in f.name
+            rel = f.absolute().relative_to(root.absolute())
+            # 不能只判断“源程序”三个字：新命名是“简称-端类型源码.pdf/docx”。
+            # 优先使用清单角色，其次用目录和两套历史命名兼容判断。
+            is_source = (role_by_path.get(f.absolute()) == "programPdf"
+                         or f.parent.name == "源程序提取"
+                         or "源程序" in f.name or "源码" in f.name)
+            seen_source[f.name] = is_source
             for m in REPO_URL.finditer(text):
                 F.add("high", "产出", str(rel), "材料中出现代码仓库地址", m.group(0),
                       "申报材料一律不得出现仓库地址：清除后重新生成")
@@ -438,9 +513,10 @@ def check_materials(root, cfg, F):
             for m in ANY_REPO.finditer(text):
                 if not REPO_URL.fullmatch(m.group(0)):
                     F.add("high", "产出", str(rel), "材料中出现徽章/包平台/仓库地址", m.group(0), "同上，清除后重新生成")
-            for name, pat in SECRETS:
-                if re.search(pat, text):
-                    F.add("high", "产出", str(rel), f"材料含敏感信息：{name}", "", "重新提取（开启脱敏）后再渲染")
+            kinds = sorted({n for _s, _e, names in secret_hits(text) for n in names})
+            if kinds:
+                F.add("high", "产出", str(rel), f"材料含敏感信息：{'／'.join(kinds)}", "",
+                      "重新提取（开启脱敏）后再渲染")
             for name, pat in PII:
                 hits = [m.group(0) for m in re.finditer(pat, text) if not PII_ALLOW.search(m.group(0))]
                 if hits:
@@ -449,11 +525,13 @@ def check_materials(root, cfg, F):
         # 一致性：名称 / 版本 / 著作权人
         name, ver = proj.get("name", ""), proj.get("version", "V1.0")
         for fname, text in seen_text.items():
-            if "源程序" in fname:
+            if seen_source.get(fname, False):
                 continue
-            if name and name not in text:
+            if name and not _contains_material_value(text, name):
                 F.add("high", "产出", f"{proj['id']}/{fname}", "材料中找不到软件全称", name, "各材料的软件全称必须完全一致")
-            if ver and ver not in text and fname != "config.json":
+            # 软件说明书和源码 PDF 的标题允许使用简称，且正文不强制展示版本号；
+            # 版本一致性只在申请表文案和 auto-fill 配置中核对。
+            if ver and ver not in text and fname in {"申请表填报文案.md", "config.json"}:
                 F.add("medium", "产出", f"{proj['id']}/{fname}", "材料中找不到版本号", ver, "核对版本号一致")
             if fname == "申请表填报文案.md" and holder and holder not in text:
                 F.add("high", "产出", f"{proj['id']}/{fname}", "申请表著作权人与 config 不一致", holder, "核对著作权人全称")
@@ -472,8 +550,9 @@ def check_materials(root, cfg, F):
 # ------------------------------------------------------------------ 输出
 def render(F, cfg, bad_files):
     rows = sorted(F.items, key=lambda i: (SEV_ORDER[i["severity"]], i["layer"], i["where"]))
+    holder = configured_fact(cfg.get("copyright_holder", "")) or "未填写"
     out = ["# 版权风险检查报告", "",
-           f"> 著作权人：{cfg.get('copyright_holder', '【未填】')}　｜　"
+           f"> 著作权人：{holder}　｜　"
            f"高 {F.count('high')} ／ 中 {F.count('medium')} ／ 低 {F.count('low')}",
            "> 本报告只做线索排查，不构成法律意见；高风险项处理完再进入 PDF 渲染与填表。", ""]
     if bad_files:

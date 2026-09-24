@@ -19,7 +19,8 @@ def build(root=ROOT):
     for folder in ['scripts', 'references', 'assets', 'tests']:
         entries.extend(p for p in (root / folder).rglob('*') if p.is_file()
                        and '__pycache__' not in p.parts and 'node_modules' not in p.parts
-                       and p.suffix in {'.py', '.js', '.json', '.md'}
+                       and (p.suffix in {'.py', '.js', '.json', '.md'}
+                            or p == root / 'assets' / 'ai-compliance-template.docx')
                        and p.name != 'config.json')
     out = root / 'dist'
     out.mkdir(exist_ok=True)

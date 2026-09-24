@@ -12,6 +12,7 @@
 import argparse
 import html
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -20,8 +21,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from aigc_check import HIGH, LOW, analyze  # noqa: E402
 from copyright_check import Findings, check_materials, check_project, check_sources  # noqa: E402
+from artifact_manifest import formal_material_paths, _zhusque_status  # noqa: E402
+from jev_check import evaluate_material  # noqa: E402
+from output_names import (manual_pdf_name, source_material_docx_name,
+                          source_material_pdf_name, submission_dir,
+                          manual_page_window)  # noqa: E402
+from application_form import validate  # noqa: E402
+from ai_compliance import FOLDER as AI_FOLDER, filename as ai_filename, supplemental_status  # noqa: E402
 
 SKILL = Path(__file__).resolve().parents[1]
+MISSING_FACT = re.compile(r"^\s*(?:待确认|待填写|待补充|待核验)(?:\s*[（(].*)?\s*$")
+
+
+def configured_fact(value):
+    text = str(value or "").strip()
+    return "" if MISSING_FACT.fullmatch(text) else text
 
 
 def pdf_pages(path):
@@ -55,16 +69,37 @@ def scan_project(root, cfg, proj, cfg_path, repo):
     manual_md = d / "软件说明书.md"
     apply_md = d / "申请表填报文案.md"
     af = d / "auto-fill" / "config.json"
-    src_docx = sorted((d / "源程序提取").glob("源程序鉴别材料-*.docx")) if (d / "源程序提取").exists() else []
-    src_pdf = sorted((d / "源程序提取").glob("源程序鉴别材料-*.pdf")) if (d / "源程序提取").exists() else []
-    manual_pdf = next((p for p in [d / "软件说明书.pdf", d / "软件文档.pdf"] if p.exists()), d / "软件说明书.pdf")
+    source_dir = d / "源程序提取"
+    final_dir = submission_dir(d)
+    formal = formal_material_paths(d)
+    if formal:
+        # 正式清单存在时不再从旧版目录“猜”文件，缺失就明确显示为缺失。
+        src_pdf = [formal["programPdf"]] if formal.get("programPdf") else []
+        src_docx = [source_dir / source_material_docx_name(proj)]
+        manual_pdf = formal.get("docPdf", d / manual_pdf_name(proj))
+    else:
+        src_docx = ([source_dir / source_material_docx_name(proj)] if (source_dir / source_material_docx_name(proj)).exists() else [])
+        src_docx += sorted(source_dir.glob("*源程序鉴别材料-*.docx")) if source_dir.exists() else []
+        src_pdf = ([source_dir / source_material_pdf_name(proj)] if (source_dir / source_material_pdf_name(proj)).exists() else [])
+        src_pdf = ([final_dir / source_material_pdf_name(proj)]
+                   if (final_dir / source_material_pdf_name(proj)).exists() else
+                   ([source_dir / source_material_pdf_name(proj)]
+                    if (source_dir / source_material_pdf_name(proj)).exists() else []))
+        src_pdf += sorted(source_dir.glob("*源程序鉴别材料-*.pdf")) if source_dir.exists() else []
+        manual_pdf = next((p for p in [final_dir / manual_pdf_name(proj),
+                                       d / manual_pdf_name(proj), d / "软件说明书.pdf",
+                                       d / "软件文档.pdf"] if p.exists()),
+                          final_dir / manual_pdf_name(proj))
     shots = json.loads((d / "截图清单.json").read_text(encoding="utf-8")) if (d / "截图清单.json").exists() else {}
+    zhusque_status = _zhusque_status(d)
 
     info = {
         "id": proj["id"], "name": proj.get("name", proj["id"]), "version": proj.get("version", "V1.0"),
-        "holder": cfg.get("copyright_holder", ""), "dev_date": cfg.get("development_completed_date", ""),
+        "holder": configured_fact(cfg.get("copyright_holder", "")),
+        "dev_date": configured_fact(cfg.get("development_completed_date", "")),
         "publish": cfg.get("first_publication_date", "未发表"),
         "files": [], "metrics": {}, "todos": [], "aigc": None, "chapters": [], "issues": [],
+        "zhusque": zhusque_status,
     }
 
     for label, path, note in [
@@ -78,9 +113,28 @@ def scan_project(root, cfg, proj, cfg_path, repo):
         info["files"].append({"label": label, "ok": path.exists(), "path": str(path.relative_to(root)) if path.exists() else "—",
                               "note": note})
 
+    ai_status = supplemental_status(root, cfg, proj)
+    info["ai_compliance"] = ai_status
+    if ai_status["enabled"]:
+        for extension, label in (("docx", "AI 合规声明 Word"), ("pdf", "AI 合规声明 PDF")):
+            path = ((final_dir if extension == "pdf" else d / AI_FOLDER)
+                    / ai_filename(proj, extension))
+            if extension == "pdf" and not path.exists():
+                legacy = d / AI_FOLDER / ai_filename(proj, extension)
+                if legacy.exists():
+                    path = legacy
+            ok = path.exists() and (ai_status["pdf_current"] if extension == "pdf" else ai_status["current"])
+            note = "需核对并签署" if ok else "未生成或已过期，请重新生成"
+            if ai_status["missing"]:
+                note += "；缺少：" + "、".join(ai_status["missing"])
+            info["files"].append({"label": label, "ok": ok,
+                                  "path": str(path.relative_to(root)) if path.exists() else "—", "note": note})
+
     form = json.loads(af.read_text(encoding="utf-8")) if af.exists() else {}
     flat = {k: v for sec in form.values() if isinstance(sec, dict) for k, v in sec.items()}
-    todo_fields = [k for k, v in flat.items() if isinstance(v, str) and re.search(r"【[^】]*】", v)]
+    form_issues = validate(form, d, None) if form else []
+    todo_fields = [i["field"] for i in form_issues if i["level"] == "high"
+                   and i["field"] not in {"programPdf", "docPdf"}]
     main_len = len(re.sub(r"\s", "", str(flat.get("mainFunction", ""))))
     info["form"] = {"exists": bool(form), "todo_fields": todo_fields, "main_len": main_len,
                     "total": len(flat)}
@@ -106,9 +160,35 @@ def scan_project(root, cfg, proj, cfg_path, repo):
     return info
 
 
-def build(cfg_path, repo, cfg):
+def build(cfg_path, repo, cfg, *, jev=False, allow_upload=False):
     root = Path(cfg.get("output_root", "soft-copyright-materials"))
     projects = [scan_project(root, cfg, p, cfg_path, repo) for p in cfg["projects"]]
+
+    if jev:
+        for info, project in zip(projects, cfg["projects"]):
+            material_dir = root / project["id"]
+            try:
+                info["jev"] = evaluate_material(
+                    material_dir,
+                    project,
+                    allow_upload=allow_upload,
+                    max_chars=int(cfg.get("jev", {}).get("max_chars", 6000)),
+                    endpoint=cfg.get("jev", {}).get("endpoint") or os.environ.get("TYPESAFE_API_URL", "https://api.typesafe.ai/v1/systemone"),
+                    model=cfg.get("jev", {}).get("model") or os.environ.get("TYPESAFE_MODEL", "jev-latest"),
+                    min_ui=float(cfg.get("jev", {}).get("ui_interaction_min", 0.95)),
+                    min_engineering=float(cfg.get("jev", {}).get("engineering_readiness_min", 0.95)),
+                    max_human_review=float(cfg.get("jev", {}).get("human_review_max", 0.05)),
+                    local_checks={
+                        "metrics": info.get("metrics", {}),
+                        "aigc": info.get("aigc", {}),
+                        "issue_counts": {
+                            "high": sum(1 for item in info.get("issues", []) if item.get("sev") == "high"),
+                            "total": len(info.get("issues", [])),
+                        },
+                    },
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(f"{project.get('name', project['id'])} 的 Jev 检查失败：{exc}") from exc
 
     F = Findings()
     check_project(repo, cfg, F)
@@ -126,20 +206,34 @@ def build(cfg_path, repo, cfg):
                 p["issues"].append({"kind": f"版权·{item['layer']}", "sev": item["severity"],
                                     "where": item["where"], "what": item["rule"], "text": item["advice"]})
     # 待办：按“现在该做什么”排序
-    for p in projects:
+    for p, project in zip(projects, cfg["projects"]):
         a, m = p["aigc"], p["metrics"]
-        hi = sum(1 for i in p["issues"] if i["sev"] == "high")
+        # AIGC findings and copyright findings share the issue list, but only
+        # copyright findings belong in the copyright-risk gate.  Counting all
+        # high-severity issues here made an AIGC warning appear as
+        # “版权风险高危” on the dashboard and incorrectly blocked submission.
+        hi = sum(1 for i in p["issues"]
+                 if i["sev"] == "high" and str(i.get("kind", "")).startswith("版权"))
         if not (root / p["id"] / "软件说明书.md").exists():
             p["todos"].append(("high", "说明书还没生成", cmd("generate_docs.py", f"--config {cfg_path}")))
         if a and a["placeholders"]:
-            p["todos"].append(("high", f"说明书还有 {a['placeholders']} 处占位符没填",
+            p["todos"].append(("high", f"说明书还有 {a['placeholders']} 处草稿占位符（【待…】/【截图预留…】），不得生成或上传 PDF",
                                "读源码补真实内容；素材见 说明书素材.json"))
         if a and a["score"] >= LOW:
-            p["todos"].append(("high" if a["score"] >= HIGH else "medium",
+            # 与 aigc_check.py --fail-above 35 闸门一致：≥ LOW 即不可进入提交
+            p["todos"].append(("high",
                                f"AIGC {a['score']} 分（{a['grade']}），需改写",
                                cmd("aigc_rewrite.py", f"{root / p['id']} --apply")))
         if hi:
             p["todos"].append(("high", f"版权风险高危 {hi} 条", cmd("copyright_check.py", f"--config {cfg_path} --repo {repo} --fail-on high")))
+        z = p.get("zhusque", {})
+        if not z.get("checked") and not z.get("waived"):
+            p["todos"].append((
+                "high",
+                f"尚未完成朱雀正式检测（必需），材料不能作为终稿上传；用户明确拒绝已记录 {z.get('declines', 0)} 次，满 2 次才可豁免",
+                cmd("zhusque_check.py", f"finalize {root / p['id']} --allow-upload --report {root / p['id'] / '朱雀检测报告.md'}")
+                + "；没有 Key 时打开 https://matrix.tencent.com/ai-detect/ 手动检测",
+            ))
         f = p.get("form", {})
         if not f.get("exists"):
             p["todos"].append(("high", "申请表字段未生成", cmd("application_form.py", f"--config {cfg_path}")))
@@ -154,18 +248,46 @@ def build(cfg_path, repo, cfg):
                                cmd("form_plan.py", f"--config {root / p['id'] / 'auto-fill' / 'config.json'} "
                                                    f"--out {root / p['id'] / '填表操作计划.md'}")
                                + "，然后让 Claude 用浏览器插件按计划填写并保存草稿"))
-        if not m["截图"]:
-            p["todos"].append(("low", "没有截图，说明书保留占位文字",
+        # Screenshot evidence is optional for offline/backend materials.  Do
+        # not turn an explicitly disabled screenshot set into a misleading
+        # todo; the manual renderer omits the screenshot chapter as well.
+        screenshots_enabled = project.get("include_screenshots")
+        if screenshots_enabled is None:
+            screenshots_enabled = bool(m["截图"])
+        if screenshots_enabled and not m["截图"]:
+            p["todos"].append(("low", "没有截图（说明书不含图位；需要截图时补真实截图后重新生成）",
                                cmd("screenshots.py", f"--materials {root / p['id']}")))
         if not m["说明书页数"]:
             p["todos"].append(("medium", "说明书 PDF 未渲染", cmd("render_pdfs.py", f"--config {cfg_path}")))
-        elif m["说明书页数"] < 40:
-            p["todos"].append(("low", f"说明书仅 {m['说明书页数']} 页，通常 50–80 页", "补充功能章节的操作步骤与截图"))
+        else:
+            low_pages, high_pages, target_pages = manual_page_window(project, cfg)
+            if m["说明书页数"] < low_pages:
+                detail = "按源码、真实操作步骤和已采集截图补充；不添加空白页或重复段落"
+                if not screenshots_enabled:
+                    detail = "按源码和实际功能补充内容；不添加空白页或重复段落"
+                p["todos"].append((
+                    "low",
+                    f"说明书仅 {m['说明书页数']} 页，低于约 {target_pages} 页目标（建议 {low_pages}–{high_pages} 页）",
+                    detail,
+                ))
+            elif m["说明书页数"] > high_pages:
+                p["todos"].append((
+                    "low",
+                    f"说明书 {m['说明书页数']} 页，高于约 {target_pages} 页目标（建议 {low_pages}–{high_pages} 页）",
+                    "删除重复或空泛段落，保留可由源码、界面和运行记录核对的内容",
+                ))
         if not m["源程序页数"]:
             p["todos"].append(("medium", "源程序 PDF 未生成",
                                cmd("generate_source_docx.py", f"--config {cfg_path} --repo {repo}") + " && " + cmd("render_pdfs.py", f"--config {cfg_path}")))
         elif m["源程序页数"] < 60:
             p["todos"].append(("high", f"源程序只有 {m['源程序页数']} 页，不足 60 页", "在 config 补选自研文件后重新提取"))
+        if p.get("jev") and not p["jev"]["gate"]["passed"]:
+            gate = p["jev"]["gate"]
+            p["todos"].append((
+                "high",
+                f"Jev 闸门未通过（UI {gate['ui_interaction']!s}，工程 {gate['engineering_readiness']!s}，人工复核 {gate['human_review']!s}）",
+                "按 Jev 结果补充真实截图/事实并人工复核；Jev 不替代朱雀和本地检查",
+            ))
         p["ready"] = not any(t[0] == "high" for t in p["todos"])
     return projects, F
 
@@ -208,7 +330,7 @@ def render(projects, F, cfg, cfg_path):
     out = [f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>软著材料看板</title><style>{CSS}</style></head>
 <body><div class="wrap"><h1>软著材料看板</h1>
-<div class="sub">著作权人 {esc(cfg.get('copyright_holder', '【未填】'))}　｜　发表状态 {esc(cfg.get('first_publication_date', '未发表'))}
+<div class="sub">著作权人 {esc(configured_fact(cfg.get('copyright_holder', '')) or '登录账号带入（页面回读）')}　｜　发表状态 {esc(configured_fact(cfg.get('first_publication_date', '未发表')) or '未发表')}
 　｜　配置 <code>{esc(cfg_path)}</code>　｜　{datetime.now():%Y-%m-%d %H:%M} 扫描</div>
 <div class="grid">
 <div class="stat"><b>{len(projects)}</b><span>份软著</span></div>
@@ -224,7 +346,7 @@ def render(projects, F, cfg, cfg_path):
                  else '<span class="badge b-hi">待处理</span>')
         out.append(f"""<div class="card"><div class="head">
 <h2>{esc(p['name'])} <span class="meta">{esc(p['version'])}　{esc(p['id'])}</span></h2>{badge}</div>
-<div class="meta">开发完成 {esc(p['dev_date'] or '【未填】')}　｜　发表状态 {esc(p['publish'])}</div>
+<div class="meta">开发完成 {esc(p['dev_date'] or '需填写日期')}　｜　发表状态 {esc(p['publish'])}</div>
 <div class="m">""")
         for k, v in p["metrics"].items():
             out.append(f"<div><b>{v}</b>{esc(k)}</div>")
@@ -232,6 +354,18 @@ def render(projects, F, cfg, cfg_path):
             color = "ok" if a["score"] < LOW else ("mid" if a["score"] < HIGH else "hi")
             out.append(f"""<div><b style="color:var(--{color})">{a['score']}</b>AIGC 分（{esc(a['grade'])}）</div>
 <div><b>{a['op_ratio']:.0%}</b>操作句占比</div>""")
+        if p.get("jev"):
+            gate = p["jev"]["gate"]
+            jev_color = "ok" if gate["passed"] else "hi"
+            out.append(
+                f"<div><b style='color:var(--{jev_color})'>{'通过' if gate['passed'] else '需复核'}</b>Jev 闸门</div>"
+                f"<div class='meta'>UI {gate['ui_interaction']}　工程 {gate['engineering_readiness']}　人工复核 {gate['human_review']}</div>"
+            )
+        zhusque = p.get("zhusque", {})
+        zhusque_color = "ok" if zhusque.get("checked") else ("mid" if zhusque.get("waived") else "hi")
+        zhusque_label = ("已检测" if zhusque.get("checked")
+                         else f"用户拒绝 {zhusque.get('declines', 0)} 次·豁免" if zhusque.get("waived") else "未检测")
+        out.append(f"<div><b style='color:var(--{zhusque_color})'>{zhusque_label}</b>朱雀正式检测</div>")
         out.append("</div>")
         if a:
             out.append(f"""<div class="bar"><i style="width:{a['human']}%;background:var(--ok)"></i>
@@ -273,7 +407,7 @@ def render(projects, F, cfg, cfg_path):
 
     out.append(f"""<div class="foot">AIGC 分为本地启发式估计（&lt;{LOW} 低 / {LOW}-{HIGH} 中 / ≥{HIGH} 高），
 不等同于商业检测结论；版权检查只做线索排查，不构成法律意见。重新扫描：
-<code>python3 {SKILL}/scripts/dashboard.py --config {esc(cfg_path)} --repo &lt;项目目录&gt;</code></div>
+<code>python3 {SKILL}/scripts/dashboard.py --config {esc(cfg_path)} --repo &lt;项目目录&gt;</code>；Jev 需显式加 <code>--jev --allow-upload</code></div>
 </div></body></html>""")
     return "\n".join(out)
 
@@ -284,12 +418,16 @@ def main():
     ap.add_argument("--repo", default=".", help="项目源码目录（版权检查用）")
     ap.add_argument("--out", help="HTML 输出路径（默认 <output_root>/看板.html）")
     ap.add_argument("--json", help="同时输出 JSON")
+    ap.add_argument("--jev", action="store_true", help="启用可选 Jev 材料闸门（默认关闭，不联网）")
+    ap.add_argument("--allow-upload", action="store_true", help="确认允许把有限材料摘要发送到 TypeSafe Jev")
     args = ap.parse_args()
 
     cfg_path = Path(args.config)
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     root = Path(cfg.get("output_root", "soft-copyright-materials"))
-    projects, F = build(cfg_path, Path(args.repo).resolve(), cfg)
+    if args.allow_upload and not args.jev:
+        ap.error("--allow-upload 只可与 --jev 一起使用")
+    projects, F = build(cfg_path, Path(args.repo).resolve(), cfg, jev=args.jev, allow_upload=args.allow_upload)
     out = Path(args.out) if args.out else root / "看板.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render(projects, F, cfg, cfg_path), encoding="utf-8")

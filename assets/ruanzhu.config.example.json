@@ -1,9 +1,24 @@
 {
+  "_comment": "空字符串表示尚未配置：生成器会省略对应内容，校验清单会列出缺失项。只填经源码或事实核实的内容，不要写占位文字。modules 格式为 [[\"模块名\", \"真实功能说明\"], ...]。",
   "project_name": "示例项目",
   "output_root": "soft-copyright-materials",
   "document_style": "reference",
-  "copyright_holder": "【待填写】",
-  "development_completed_date": "【待填写】",
+  "manual_page_target": 40,
+  "manual_page_tolerance": 5,
+  "ai_compliance": {
+    "mode": "auto",
+    "declaration_date": "",
+    "recipient": "国家版权局"
+  },
+  "jev": {
+    "model": "jev-latest",
+    "max_chars": 6000,
+    "ui_interaction_min": 0.95,
+    "engineering_readiness_min": 0.95,
+    "human_review_max": 0.05
+  },
+  "copyright_holder": "",
+  "development_completed_date": "",
   "first_publication_date": "未发表",
   "self_open_source": false,
   "self_aliases": [],
@@ -12,30 +27,59 @@
       "id": "01-示例智能协作平台软件",
       "name": "示例智能协作平台软件",
       "short_name": "示例平台",
+      "artifact_label": "后端",
       "version": "V1.0",
       "document_kind": "backend",
-      "position": "【待填写：软件类型】",
-      "summary": "【待填写：软件用途和核心入口，必须引用项目事实】",
-      "scope": "【待填写：软件负责的业务范围与不负责的边界】",
-      "architecture_overview": "【待填写：从真实源码整理架构和调用关系】",
+      "tech_feature_tag": "应用软件",
+      "position": "",
+      "summary": "",
+      "scope": "",
+      "architecture_overview": "",
       "architecture_layers": [],
-      "data_flow": "【待填写：一次真实请求从入口到响应的步骤】",
+      "data_flow": "",
       "tech_stack": [],
+      "environment_profile": {
+        "development": {
+          "hardware": {
+            "recommended": true,
+            "cpu_cores": "",
+            "memory_gb": "",
+            "disk_free_gb": "",
+            "network": ""
+          },
+          "operating_systems": [],
+          "tools": []
+        },
+        "runtime": {
+          "hardware": {
+            "recommended": true,
+            "cpu_cores": "",
+            "memory_gb": "",
+            "disk_free_gb": "",
+            "network": "",
+            "storage_note": ""
+          },
+          "operating_systems": [],
+          "support_software": [],
+          "deployment": []
+        }
+      },
       "hardware": [],
       "environment": [],
       "permissions": [],
-      "install_prerequisites": "【待填写：项目实际安装前置条件】",
+      "install_prerequisites": "",
       "install_steps": [],
       "verification": [],
-      "configuration_overview": "【待填写：实际配置项和生效方式】",
+      "configuration_overview": "",
       "config_items": [],
       "quick_start": [],
       "operations": [],
-      "logging": "【待填写：实际日志文件、字段和查看方式】",
-      "data_maintenance": "【待填写：实际数据、缓存和备份处理方式】",
-      "security": "【待填写：源码和部署配置中实际存在的安全措施】",
+      "logging": "",
+      "data_maintenance": "",
+      "security": "",
       "faq": [],
       "tests": [],
+      "api_examples": [],
       "source_pages": 60,
       "lines_per_page": 90,
       "source_material": {
@@ -44,16 +88,7 @@
         "max_blank_lines": 1
       },
       "extra_chapters": [],
-      "modules": [
-        [
-          "模块一",
-          "模块一功能说明。"
-        ],
-        [
-          "模块二",
-          "模块二功能说明。"
-        ]
-      ],
+      "modules": [],
       "users": [
         "普通用户",
         "管理员",

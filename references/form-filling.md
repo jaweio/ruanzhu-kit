@@ -20,6 +20,9 @@ python3 scripts/application_form.py --config soft-copyright-materials/ruanzhu.co
 
 # ② 生成操作计划：逐控件列出「填什么值 / 怎么核对」，长文本单独落盘
 python3 scripts/form_plan.py --config <材料目录>/auto-fill/config.json --out <材料目录>/填表操作计划.md
+
+# ③ 浏览器上传前核对端类型、材料类型、页数和表单路径
+python3 scripts/artifact_manifest.py --config <配置> --project <项目 id> --verify --strict
 ```
 
 计划里每个字段标了类型（text / textarea / select / choice / date / number / file）、长度上限、是否需要回读。
@@ -35,7 +38,7 @@ python3 scripts/form_plan.py --config <材料目录>/auto-fill/config.json --out
 | 下拉/单选 | 展开后按选项文字点选，填完回读一次确认选中的是目标项 |
 | 日期 | 填完按 Esc 关掉日期面板，再回读文本框 |
 | 长文本 | 从 `长文本/*.txt` 复制整段填入，**填完必须回读字数**，确认没被截断 |
-| 上传 | 用文件上传工具选 `auto-fill/config.json` 里那两个 PDF 的绝对路径；等待上传完成提示，再回读文件名 |
+| 上传 | 用文件上传工具选 `auto-fill/config.json` 里那两个 PDF 的绝对路径；先对照 `材料上传清单.json`，等待上传完成提示，再回读文件名 |
 | 翻页 | 每步填完先回读关键字段，确认无误再点「下一步」；页面报红就停下看提示，不要反复重试 |
 
 ## 4. 回读核对（必须做）
