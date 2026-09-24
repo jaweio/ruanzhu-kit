@@ -7,6 +7,12 @@ import render_pdfs  # noqa: E402
 
 
 class ScreenshotLayoutTests(unittest.TestCase):
+    def test_manual_uses_a4_paper_in_every_style(self):
+        for style in render_pdfs.STYLE_CHOICES:
+            html = render_pdfs.html_doc("订单管理系统", "<p>正文</p>", style=style, chapters=["软件概述"])
+            self.assertIn("size: A4", html, style)
+            self.assertNotIn("Letter", html, style)
+
     def test_screenshot_and_caption_are_wrapped_in_one_figure(self):
         html = (
             '<p><img src="截图/7-7.png" alt="图 7-7 收件箱" /></p>\n'

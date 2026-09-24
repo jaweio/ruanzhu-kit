@@ -112,7 +112,7 @@ def html_doc(title, body, version="", style="reference", chapters=None):
     chapters = chapters or list(CHAPTERS)
     if style == "reference":
         links = "\n".join(f'<li><a href="#chapter-{i+1}">{i+1:02d}-{c}</a></li>' for i, c in enumerate(chapters))
-        page_css = """@page { size: Letter; margin: 20mm 19mm 17mm;
+        page_css = """@page { size: A4; margin: 20mm 19mm 17mm;
   @top-left { content: \"\"; }
   @bottom-right { content: counter(page); font-size: 10pt; color: #555; }
 }
@@ -135,7 +135,7 @@ th,td { border:1px solid #d1d5db; padding:6px 8px; vertical-align:top; }
 th { background:#f7f7f7; }"""
     else:
         links = "\n".join(f'<li><a href="#chapter-{i+1}">{i+1}. {c}</a></li>' for i, c in enumerate(chapters))
-        page_css = """@page { size: Letter; margin: 22mm 19mm 18mm;
+        page_css = """@page { size: A4; margin: 22mm 19mm 18mm;
   @top-left { content: \"\"; }
   @bottom-center { content: counter(page); font-size: 9pt; color: #6b7280; }
 }
