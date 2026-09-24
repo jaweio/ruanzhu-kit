@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; frame-src file:; style-src 'self' 'unsafe-inline'">
+<title>软著工具箱</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="titlebar">
+  <div class="brand">软著工具箱</div>
+  <button id="repoBtn" class="repo">选择项目文件夹…</button>
+  <div class="spacer"></div>
+  <button id="settingsBtn" class="ghost">设置</button>
+</header>
+
+<div class="shell">
+  <nav id="nav">
+    <a data-view="project" class="active"><b>1</b>项目与环境</a>
+    <a data-view="info"><b>2</b>基本信息</a>
+    <a data-view="analyze"><b>3</b>AI 分析</a>
+    <a data-view="generate"><b>4</b>AI 生成材料</a>
+    <a data-view="editor"><b>5</b>说明书编辑</a>
+    <a data-view="export"><b>6</b>导出与校验</a>
+    <a data-view="fill"><b>7</b>填表</a>
+  </nav>
+
+  <main>
+    <!-- 1 项目 -->
+    <section id="view-project" class="view active">
+      <h1>项目与环境</h1>
+      <p class="lead">选择你自己的软件源码目录。材料写入该目录下的 <code>soft-copyright-materials/</code>，不会修改源代码。</p>
+      <div class="card" id="repoCard"><p class="muted">还没有选择项目。</p></div>
+      <div class="card">
+        <h3>本机环境</h3>
+        <dl class="kv" id="envInfo"></dl>
+        <div class="row"><button data-run="preflight">检查依赖</button><button id="installPy" hidden>一键安装 Python 依赖</button></div>
+      </div>
+      <div class="card note">
+        <b>原则</b>：材料只根据真实源码生成；缺什么就留空并提示补充，不生成占位文字，不编造功能；填表只保存草稿，正式提交由你本人操作。
+      </div>
+    </section>
+
+    <!-- 2 基本信息 -->
+    <section id="view-info" class="view">
+      <h1>基本信息</h1>
+      <p class="lead">这些信息 AI 无法从代码中得知，请如实填写。留空的项会在校验时列出。</p>
+      <form id="infoForm" class="grid"></form>
+      <div class="row"><button id="saveInfo" class="primary">保存</button><span id="saveInfoMsg" class="muted"></span></div>
+    </section>
+
+    <!-- 3 AI 分析 -->
+    <section id="view-analyze" class="view">
+      <h1>AI 分析项目</h1>
+      <p class="lead">读取源码，识别功能模块，挑选源程序取材文件，并把结果写入配置。默认一个代码库做一份软著。</p>
+      <div class="card">
+        <label class="field"><span>拆分要求（可选）</span><input id="splitNote" placeholder="例如：后端和桌面端分别申请两份"></label>
+        <label class="field"><span>补充说明（可选）</span><textarea id="analyzeNote" rows="2" placeholder="例如：主要面向中小学老师；支付模块不属于本软件"></textarea></label>
+        <div class="row"><button class="primary" data-agent="analyze">开始分析</button><button class="ghost" data-stop>停止</button></div>
+      </div>
+      <div class="card"><h3>分析结果</h3><div id="modules" class="muted">尚未分析。</div></div>
+    </section>
+
+    <!-- 4 AI 生成 -->
+    <section id="view-generate" class="view">
+      <h1>AI 生成材料</h1>
+      <p class="lead">生成说明书和源程序材料，完成开源痕迹清除和 AIGC 文风处理（目标每份 &lt; 35 分）。通常需要几分钟到十几分钟。</p>
+      <div class="card">
+        <label class="field"><span>补充说明（可选）</span><textarea id="generateNote" rows="2" placeholder="例如：功能模块章节按“新建→审核→归档”的顺序写"></textarea></label>
+        <div class="row"><button class="primary" data-agent="generate">开始生成</button><button class="ghost" data-stop>停止</button><div class="spacer"></div><button data-run="docs">仅用脚本生成（不调用 AI）</button></div>
+        <p class="muted small">生成完成后会主动进入朱雀检测。已配置 Key 时由你确认后自动发送；未配置时保留本地材料，并提供网页检测入口。</p>
+      </div>
+      <div class="card" id="zhusqueCard">
+        <h3>朱雀检测状态</h3>
+        <p id="zhusqueStatus" class="muted">正在检查本机配置…</p>
+        <div class="row">
+          <button id="zhusqueRun" class="primary">立即检测当前材料</button>
+          <button id="zhusqueWeb" class="ghost">打开朱雀网页检测</button>
+          <button id="zhusqueKey" class="ghost">配置 API Key</button>
+        </div>
+        <p id="zhusqueHint" class="muted small"></p>
+      </div>
+      <div class="card">
+        <h3>截图（可选）</h3>
+        <p class="muted">把真实界面截图放进截图文件夹，文件名带模块名或序号，再点“整理截图”并重新生成。没有截图时说明书不留图位。</p>
+        <div class="row"><button data-shotdir>打开截图文件夹</button><button data-run="screenshots" data-pid>整理截图</button></div>
+      </div>
+    </section>
+
+    <!-- 5 编辑 -->
+    <section id="view-editor" class="view">
+      <div class="editor-head">
+        <h1>说明书编辑</h1>
+        <select id="editorProject"></select>
+        <span id="phBadge" class="badge"></span>
+        <div class="spacer"></div>
+        <button id="reloadDoc" class="ghost">重新载入</button>
+        <button id="saveDoc" class="primary">保存</button>
+      </div>
+      <div class="split">
+        <textarea id="docText" spellcheck="false"></textarea>
+        <article id="docPreview" class="preview"></article>
+      </div>
+      <div class="card revise">
+        <input id="reviseNote" placeholder="让 AI 修改：例如“第 7 章缩短，删掉没有源码依据的描述”">
+        <button data-agent="revise">让 AI 修改</button>
+      </div>
+    </section>
+
+    <!-- 6 导出 -->
+    <section id="view-export" class="view">
+      <h1>导出与校验</h1>
+      <div class="card">
+        <div class="row wrap">
+          <button data-run="source">① 生成源程序材料</button>
+          <button data-run="pdf">② 生成 PDF</button>
+          <button data-run="form">③ 生成申请表字段</button>
+          <button data-run="manifest" data-pid>④ 上传材料核验</button>
+          <button data-run="dashboard" class="primary">刷新看板</button>
+        </div>
+        <p class="muted">说明书含任何占位文字时，PDF 会被拒绝生成；上传前核验会抽取 PDF 文字再检查一遍。</p>
+      </div>
+      <div class="card">
+        <h3>朱雀检测</h3>
+        <p id="zhusqueExportStatus" class="muted">生成材料后，必须完成一次朱雀检测并保留报告。</p>
+        <div class="row"><button id="zhusqueExportRun" class="primary">检测正式材料</button><button id="zhusqueExportWeb" class="ghost">没有 Key，打开网页检测</button><button id="zhusqueDecline" class="ghost">拒绝朱雀检测</button></div>
+      </div>
+      <div class="card"><h3>产物</h3><div id="outputs" class="muted">暂无。</div></div>
+      <div class="card board"><iframe id="board" title="看板"></iframe></div>
+    </section>
+
+    <!-- 7 填表 -->
+    <section id="view-fill" class="view">
+      <h1>填写 R11 申请表</h1>
+      <p class="lead">用本机 Chrome 打开版权保护中心，由你本人登录；App 按申请表字段自动填写并<strong>保存草稿后停止</strong>。确认无误后，请你本人点击“确认填报”。</p>
+      <div class="card">
+        <div class="row wrap">
+          <button data-run="plan" data-pid>生成填表计划</button>
+          <button id="fillCheck">校验字段</button>
+          <button id="fillRun" class="primary">打开浏览器并填写</button>
+        </div>
+        <p class="muted">字段为空或含占位文字时会拒绝填写，并列出缺少的项目。</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer id="logPane">
+  <div class="loghead"><b id="logTitle">日志</b><span id="busy" class="busy" hidden>运行中…</span><div class="spacer"></div><button id="clearLog" class="ghost small">清空</button><button id="toggleLog" class="ghost small">收起</button></div>
+  <pre id="log"></pre>
+</footer>
+
+<dialog id="settings">
+  <form method="dialog">
+    <h2>设置</h2>
+    <label class="field"><span>模型（可选）</span><input name="model" placeholder="默认使用 Claude Code 的设置，如 claude-opus-5"></label>
+    <label class="field"><span>Anthropic API Key（可选）</span><input name="apiKey" type="password" placeholder="留空则使用本机 Claude Code 的登录"></label>
+    <label class="field"><span>朱雀检测 API Key（可选）</span><input name="zhusqueApiKey" type="password" placeholder="从 EdgeOne Makers 控制台获取"></label>
+    <p class="small"><a href="#" id="openZhusqueConsole">打开 EdgeOne Makers Key 页面</a></p>
+    <label class="field"><span>Python 路径（可选）</span><input name="pythonPath" placeholder="需已安装 python-docx、pypdf"></label>
+    <label class="field"><span>claude 路径（可选）</span><input name="claudePath" placeholder="默认自动查找"></label>
+    <p class="muted small">两类 API Key 都只加密保存在本机设置中，不写入项目、仓库或检测报告。</p>
+    <div class="row end"><button value="cancel" class="ghost">取消</button><button id="saveSettings" value="save" class="primary">保存</button></div>
+  </form>
+</dialog>
+
+<script src="../node_modules/marked/lib/marked.umd.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

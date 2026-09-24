@@ -1,0 +1,72 @@
+{
+  "name": "ruanzhu-app",
+  "productName": "软著工具箱",
+  "version": "0.1.0",
+  "description": "基于 ruanzhu-kit 的软著材料桌面应用",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "dist": "electron-builder --mac --dir"
+  },
+  "build": {
+    "appId": "com.ruanzhukit.app",
+    "productName": "软著工具箱",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dir"
+      ],
+      "identity": null
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "agent.js",
+      "bash-policy.js",
+      "renderer/**",
+      "package.json",
+      "!node_modules/@anthropic-ai/claude-agent-sdk-*/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../scripts",
+        "to": "kit/scripts",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!auto-fill/config.json"
+        ]
+      },
+      {
+        "from": "../assets",
+        "to": "kit/assets"
+      },
+      {
+        "from": "../references",
+        "to": "kit/references"
+      },
+      {
+        "from": "../SKILL.md",
+        "to": "kit/SKILL.md"
+      },
+      {
+        "from": "../VERSION",
+        "to": "kit/VERSION"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/@anthropic-ai/claude-agent-sdk/**"
+    ]
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.278",
+    "marked": "^18.0.14",
+    "playwright": "^1.63.0"
+  },
+  "devDependencies": {
+    "electron": "^41.7.1",
+    "electron-builder": "^26.15.3"
+  }
+}
