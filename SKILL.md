@@ -1,6 +1,6 @@
 ---
 name: ruanzhu-kit
-description: 软著工具箱。Use when Codex or Claude needs to analyze a software project and generate reusable Chinese software copyright registration materials, including project splitting, naming, application-form copy, software manuals with clickable table of contents, source-code DOCX/PDF extracts, photographed paper materials rectified into A4 PDFs, validation records, copyright-risk checks and removal of all repository/open-source traces (GitHub/Gitee URLs, license headers, badges; third-party code auto-excluded), AIGC (AI-generated text) style detection and removal for manuals and application copy, and packaged deliverables based on a configurable workflow. Also covers auto-filling the R11 form on register.ccopyright.com.cn by driving the user's already logged-in Chrome through the browser extension (or computer-use); it stops at saving a draft and never submits.
+description: 软著工具箱。Use when Codex or Claude needs to analyze a software project and generate reusable Chinese software copyright registration materials, including project splitting, naming, application-form copy, software manuals with clickable table of contents, source-code DOCX/PDF extracts, photographed paper materials rectified into A4 PDFs, validation records, copyright-risk checks and removal of all repository/open-source traces (GitHub/Gitee URLs, license headers, badges; third-party code auto-excluded), AIGC (AI-generated text) style detection and removal for manuals and application copy, and packaged deliverables based on a configurable workflow. When the user only has a requirement (e.g. "a game box app") and no code yet, first builds a real runnable uni-app project from a confirmed product spec and gates it with spec_gate.py (Step 0) before generating materials; never fabricates materials for software that does not exist. Also covers auto-filling the R11 form on register.ccopyright.com.cn by driving the user's already logged-in Chrome through the browser extension (or computer-use); it stops at saving a draft and never submits.
 ---
 
 # 软著工具箱
@@ -48,9 +48,10 @@ python3 <skill目录>/scripts/check_update.py --json
 
 ---
 
-## 完整工作流（9 步）
+## 完整工作流（9 步，无代码时先做 Step 0）
 
 ```
+Step 0  需求建项目  →  （仅在用户只有需求、没有代码时）产品规格 → 生成真实 uni-app 项目 → 构建运行 → spec_gate.py 闸门
 Step 1  分析项目    →  读取代码结构 + instructions 设计文档 + manual_spec.py 抽说明书素材
 Step 2  拆分决策    →  确认数量、名称、功能边界、源码分区（与用户确认）
 Step 3  生成配置    →  create_config.py  →  ruanzhu.config.json
@@ -64,6 +65,18 @@ Step 9  人工确认    →  浏览器核对 → 手动点「确认填报」提�
 任何时候想看整体进度：`python3 scripts/dashboard.py --config <配置> --repo <项目目录>`
 → 生成 `<output_root>/看板.html`，一页显示有几份软著、各自缺什么材料、AIGC 与版权风险、以及每条待办对应的命令。
 ```
+
+---
+
+## Step 0 — 需求建项目（只有需求、没有代码时）
+
+用户只给一句需求（如“做一个游戏盒子 App”）时，**不得凭空生成材料**：先按需求做出能运行的真实 uni-app 项目，通过闸门后再从 Step 1 开始。步骤、规格格式和红线见 [references/requirement-to-project.md](references/requirement-to-project.md)。
+
+```bash
+python3 scripts/spec_gate.py --project <项目目录> --spec <项目目录>/产品规格.json --require-build
+```
+
+闸门核对：规格页面已登记且不是空壳、自有有效代码约 3000 行以上、重复代码不超过 30%、存在 H5 构建产物。不通过时补真实功能或如实减少页数，禁止凑行数、禁止用设计稿冒充截图。
 
 ---
 

@@ -7,7 +7,7 @@ const KIT_SCRIPTS = new Set([
   'manual_spec.py', 'create_config.py', 'generate_docs.py', 'generate_source_docx.py', 'source_preview.py',
   'copyright_check.py', 'oss_scrub.py', 'aigc_check.py', 'aigc_rewrite.py', 'application_form.py',
   'artifact_manifest.py', 'form_plan.py', 'dashboard.py', 'screenshots.py', 'preflight.py',
-  'prepare_demo_data.py', 'ai_compliance.py', 'workflow_smoke.py', 'environment_profile.py',
+  'prepare_demo_data.py', 'ai_compliance.py', 'workflow_smoke.py', 'environment_profile.py', 'spec_gate.py',
 ]);
 const OUTPUT_FLAGS = new Set(['--out', '--output', '--report', '--rollback-file']);
 const FORBIDDEN_FLAGS = /^--(allow-upload|allow-write|allow-run|jev|output=|pre\b|pre=)/;
