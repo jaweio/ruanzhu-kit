@@ -27,8 +27,8 @@ DEFAULT_MODEL = "@makers/zhuque-text"
 KEYCHAIN_SERVICE = "ruanzhu-kit.zhusque"
 KEYCHAIN_ACCOUNT = "MAKERS_MODELS_KEY"
 ENV_NAMES = ("MAKERS_MODELS_KEY", "RUANZHU_ZHUSQUE_API_KEY")
-DEFAULT_CHUNK_CHARS = 12000
-CACHE_VERSION = "zhuque-classify-v2"
+DEFAULT_CHUNK_CHARS = 2000
+CACHE_VERSION = "zhuque-incremental-v3"
 FINAL_MARKER = ".zhusque-final.json"
 # 朱雀检测是终稿必过闸门；只有用户在对话/界面中明确拒绝上传，且累计拒绝次数达到阈值，
 # 才记为“用户豁免”。豁免不等于已检测，清单和看板会如实标注。
@@ -38,9 +38,9 @@ HANDOFF_DIR = "朱雀复核"
 DEFAULT_MAX_RISK_RATIO = 0.20
 def setup_hint():
     return (
-        "未绑定朱雀检测 Key。请先在腾讯 EdgeOne Makers 控制台生成 API Key：\n"
+        "未绑定朱雀检测 Key。自动渠道会尝试网页检测；也可在腾讯 EdgeOne Makers 控制台生成 API Key：\n"
         f"{CONSOLE_URL}\n\n"
-        "如果暂时不配置 Key，可直接打开腾讯朱雀网页，把生成的说明书或正文上传检测：\n"
+        "无需 Key 的官方网页入口：\n"
         f"{WEB_URL}\n\n"
         "生成后运行：\n"
         "  python3 <skill目录>/scripts/zhusque_check.py bind\n"
@@ -228,7 +228,8 @@ def cache_key(base_url, model, max_chars, text):
         "base_url": base_url.rstrip("/"),
         "model": model,
         "max_chars": max_chars,
-        "text": normalized_text(text),
+        # Preserve the exact submitted text: cached segment positions belong to it.
+        "text": text.strip(),
     }
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -286,7 +287,8 @@ def chunks(text, limit=DEFAULT_CHUNK_CHARS):
     text = text.strip()
     if not text:
         return []
-    return [text[i:i + limit] for i in range(0, len(text), limit)]
+    from zhusque_incremental import split_units
+    return [unit["text"] for unit in split_units(text, limit)]
 
 
 def request_model(key, base_url, model, filename, index, total, text, timeout=60):
@@ -309,7 +311,9 @@ def request_model(key, base_url, model, filename, index, total, text, timeout=60
         raise RuntimeError(f"朱雀接口返回 HTTP {exc.code}；Key 未写入报告。") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise RuntimeError("朱雀接口连接失败，请检查网络或接口地址。") from exc
-    return parse_result(result)
+    parsed = parse_result(result)
+    parsed["channel"] = "api"
+    return parsed
 
 
 def parse_result(content):
@@ -328,8 +332,23 @@ def parse_result(content):
         # 缓存只保存数值与位置，不保存服务返回的原文或摘要。
         segments = [{k: s[k] for k in ("label", "conf", "order", "position") if k in s}
                     for s in data.get("segment_labels", []) if isinstance(s, dict)]
-        return {"status": "success", "labels_ratio": dict(zip(("0", "1", "2"), values)),
-                "segment_labels": segments, "overall_score": round((values[1] + values[2]) * 100, 4)}
+        parsed = {"status": "success", "labels_ratio": dict(zip(("0", "1", "2"), values)),
+                  "segment_labels": segments, "overall_score": round((values[1] + values[2]) * 100, 4)}
+        for field in ("usage", "makers_models_usage"):
+            value = data.get(field)
+            if isinstance(value, dict) and isinstance(value.get("total_tokens"), int) and not isinstance(value["total_tokens"], bool) and value["total_tokens"] >= 0:
+                parsed[field] = {"total_tokens": value["total_tokens"]}
+        if data.get("channel") in ("api", "web"):
+            parsed["channel"] = data["channel"]
+        if data.get("delivery") in ("new", "resumed"):
+            parsed["delivery"] = data["delivery"]
+        # Evidence is local metadata, never a copy of page cookies or response headers.
+        if isinstance(data.get("evidence"), dict):
+            parsed["evidence"] = {k: data["evidence"][k] for k in ("screenshot", "page_text", "page_record", "text_sha256", "captured_at", "url", "ratio_source", "request_id", "source")
+                                  if isinstance(data["evidence"].get(k), str)}
+        if data.get("ratio_source") == "visible-segment-nonwhitespace-character-weighted":
+            parsed["ratio_source"] = data["ratio_source"]
+        return parsed
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("朱雀未返回有效检测结果；本次未通过，不生成完成标记。") from exc
 
@@ -390,15 +409,15 @@ def render_report(results, base_url, model):
 
 
 def write_web_handoff(target):
-    """Key 不可用时落盘网页检测入口，便于用户点开后自行上传。"""
+    """兼容旧调用方的网页入口说明；主流程使用自动浏览器适配器。"""
     directory = Path(target) if Path(target).is_dir() else Path(target).parent
     handoff = directory / HANDOFF_DIR
     handoff.mkdir(parents=True, exist_ok=True)
     (handoff / "网页检测说明.md").write_text(
         "# 朱雀网页检测\n\n"
-        "当前未配置朱雀 API Key，材料未上传。请打开腾讯朱雀网页，手动上传最终软件说明书 PDF 或正文：\n\n"
+        "当前未配置朱雀 API Key，此说明文件本身不会上传材料。官方网页入口：\n\n"
         f"{WEB_URL}\n\n"
-        "若需要自动检测，请在 EdgeOne Makers 控制台生成 Key 后，在软著工具箱设置中配置，或运行 `zhusque_check.py bind`。\n",
+        "运行 `zhusque_check.py finalize <材料目录> --allow-upload --channel auto` 可自动尝试网页；验证码、登录或额度不足时保留进度，不算通过。配置 Key 可使用 API 优先渠道。\n",
         encoding="utf-8",
     )
     return handoff
@@ -457,70 +476,12 @@ def decline(args):
 
 
 def check(args):
-    key, _source = resolve_key()
-    if not key:
-        write_web_handoff(args.targets[0])
-        print(setup_hint(), file=sys.stderr)
-        return 2
-    if not args.allow_upload:
-        print("朱雀检测会把指定文档文本发送到 EdgeOne Makers 接口。确认后请加 --allow-upload。", file=sys.stderr)
-        return 2
-    files = iter_files(args.targets)
-    if not files:
-        print("没有找到可检测的 Markdown、PDF、DOCX 或 auto-fill 配置。", file=sys.stderr)
-        return 2
-    base_url = os.environ.get("MAKERS_MODELS_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
-    model = DEFAULT_MODEL
-    manifest = final_manifest(files, base_url, model, args.max_chars) if args.finalize else None
-    marker = final_marker_path(args.targets) if args.finalize else None
-    report_path = args.report
-    if args.finalize and not report_path:
-        report_path = str(final_marker_path(args.targets).with_name("朱雀检测报告.md"))
-    if args.finalize and not args.no_cache and marker.exists() and report_path and Path(report_path).exists():
-        try:
-            previous = json.loads(marker.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            previous = {}
-        if previous.get("manifest") == manifest:
-            print(f"最终文本未变化，复用已有朱雀检测报告：{report_path}")
-            return 0
-    cache_dir = None if args.no_cache else cache_directory()
-    results = []
-    for path in files:
-        try:
-            results.append(analyse_file(path, key, base_url, model, args.max_chars, cache_dir=cache_dir))
-        except (OSError, ValueError, RuntimeError) as exc:
-            print(f"{path}: {exc}", file=sys.stderr)
-            return 1
-    report = render_report(results, base_url, model)
-    if report_path:
-        Path(report_path).write_text(report, encoding="utf-8")
-        print(f"朱雀检测报告已写入 {report_path}")
-    else:
-        print(report)
-    if args.finalize:
-        if not results or any(item.get("score") is None for item in results):
-            print("朱雀未返回完整结果，本次不生成最终完成标记。", file=sys.stderr)
-            return 1
-        risk = sum(item.get("risk_ratio", 1) for item in results) / len(results)
-        if risk > args.max_risk_ratio:
-            print(f"朱雀检测未通过：AI+疑似占比 {risk:.2%}，超过 {args.max_risk_ratio:.2%}。请按报告改写后重测。", file=sys.stderr)
-            return 1
-        marker.write_text(json.dumps({
-            "version": CACHE_VERSION,
-            "manifest": manifest,
-            "model": model,
-            "base_url": base_url,
-            "report": report_path,
-            "risk_ratio": risk,
-            "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"已记录本次最终检测指纹：{marker}")
-    return 0
+    from zhusque_incremental import run
+    return run(args)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="朱雀风格 AIGC 检测辅助（显式联网）")
+    parser = argparse.ArgumentParser(description="朱雀正式 AIGC 检测与增量复核（API / 网页）")
     sub = parser.add_subparsers(dest="command", required=True)
     bind_parser = sub.add_parser("bind", help="交互式绑定 API Key 到本机 macOS Keychain")
     bind_parser.add_argument("--open", action="store_true", help="绑定前打开腾讯 EdgeOne Makers 页面")
@@ -535,17 +496,22 @@ def main():
     decline_parser.add_argument("--user-declined", action="store_true", help="确认这是用户本人的明确拒绝")
     def add_check_args(check_parser, finalize=False):
         check_parser.add_argument("targets", nargs="+", help="Markdown/PDF/DOCX/目录")
-        check_parser.add_argument("--allow-upload", action="store_true", help="确认允许把文本发送到 EdgeOne Makers")
+        check_parser.add_argument("--allow-upload", action="store_true", help="确认允许把选定文本发送到朱雀 API 或官方网页")
         check_parser.add_argument("--report", help="报告输出路径")
         check_parser.add_argument("--max-chars", type=int, default=DEFAULT_CHUNK_CHARS, help="每次请求的文本块大小")
         check_parser.add_argument("--no-cache", action="store_true", help="不使用本机结果缓存，强制重新请求")
+        check_parser.add_argument("--channel", choices=("auto", "api", "web"), default="auto",
+                                  help="auto: API 优先，无 Key 或 API 失败自动使用有界面浏览器")
+        check_parser.add_argument("--browser-timeout", type=int, default=120,
+                                  help="网页单次最长等待秒数；验证码/登录/额度阻塞时保存进度")
+        check_parser.add_argument("--plan", action="store_true", help="只生成待检清单和预算，不上传、不启动浏览器")
         check_parser.add_argument("--max-risk-ratio", type=float, default=DEFAULT_MAX_RISK_RATIO,
                                   help="AI+疑似占比闸门，默认 0.20；仅 finalize 生效")
         check_parser.set_defaults(finalize=finalize)
 
     check_parser = sub.add_parser("check", help="联网检测指定材料（可多次调用，默认复用缓存）")
     add_check_args(check_parser)
-    finalize_parser = sub.add_parser("finalize", help="正文确认后执行一次全量朱雀检测并记录最终指纹")
+    finalize_parser = sub.add_parser("finalize", help="首次全量、之后只检测变化单元；覆盖完整且通过后记录最终指纹")
     add_check_args(finalize_parser, finalize=True)
     args = parser.parse_args()
     try:

@@ -113,6 +113,12 @@ def _pdf_pages(path):
     return int(match.group(1)) if match else None
 
 
+def _expected_source_pages(project_dir, project):
+    # 延迟导入：source_material_render → copyright_check → 本模块，顶层导入会循环
+    from source_material_render import expected_source_pages
+    return expected_source_pages(project_dir, project)[0]
+
+
 def _file_record(path, root, label, expected_pages=None):
     exists = path.is_file()
     record = {
@@ -143,13 +149,25 @@ def _zhusque_status(project_dir):
     declined = decline_status(project_dir)
     base = {"checked": False, "marker": str(marker), "report": str(report),
             "waived": declined["waived"], "declines": declined["count"],
-            "decline_threshold": declined["threshold"]}
-    if not marker.is_file() or not report.is_file():
+            "decline_threshold": declined["threshold"], "coverage_complete": False,
+            "content_match": False, "risk_ratio": None, "max_risk_ratio": 0.20}
+    progress = Path(project_dir) / ".zhusque-progress.json"
+    is_final = marker.is_file()
+    record = marker if is_final else progress
+    if not record.is_file() or not report.is_file():
         return base
     try:
-        data = json.loads(marker.read_text(encoding="utf-8"))
+        data = json.loads(record.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return base
+    if not isinstance(data, dict):
+        return base
+    if not is_final:
+        summary = data.get("summary", {})
+        if not isinstance(summary, dict):
+            return base
+        data = {**data, "coverage_complete": summary.get("complete", False),
+                "risk_ratio": summary.get("risk_ratio"), "report": str(report)}
     recorded_report = Path(str(data.get("report", ""))).expanduser()
     report_match = recorded_report.name == report.name or recorded_report.resolve() == report.resolve()
     content_match = False
@@ -167,11 +185,25 @@ def _zhusque_status(project_dir):
         )
     except (OSError, ValueError, TypeError, ImportError, RuntimeError):
         content_match = False
+    import math
+    risk = data.get("risk_ratio")
+    # 朱雀是判定 AI 生成的核心闸门：一律按固定阈值判定，不采信标记文件里记录的阈值，
+    # 避免 finalize --max-risk-ratio 1 之类的参数把任何结果都放行。
+    from zhusque_check import DEFAULT_MAX_RISK_RATIO
+    threshold = DEFAULT_MAX_RISK_RATIO
+    def ratio(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 1
+    # Existing v2 markers had no coverage field; v3 always records it explicitly.
+    complete = (data.get("coverage_complete") is True if data.get("version") == "zhuque-incremental-v3"
+                else data.get("coverage_complete", True) is True)
     return {
         **base,
-        "checked": bool(data.get("manifest")) and report_match and content_match,
+        "checked": is_final and bool(data.get("manifest")) and report_match and content_match and complete
+                   and ratio(risk) and ratio(threshold) and risk <= threshold,
         "completed_at": data.get("completed_at", ""),
-        "risk_ratio": data.get("risk_ratio"),
+        "risk_ratio": risk,
+        "max_risk_ratio": threshold,
+        "coverage_complete": complete,
         "content_match": content_match,
     }
 
@@ -192,7 +224,7 @@ def build_manifest(config_path, cfg, project, root):
     features = form.get("step4_features", {}) if isinstance(form, dict) else {}
     files = {
         "programPdf": _file_record(source_pdf, root, "程序鉴别材料",
-                                    int(project.get("source_pages", 60))),
+                                    _expected_source_pages(project_dir, project)),
         "docPdf": _file_record(manual_pdf, root, "文档鉴别材料", 1),
     }
     checks = verify_records(files, features, manual_pdf)

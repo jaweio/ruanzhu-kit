@@ -68,14 +68,15 @@
       <div class="card">
         <label class="field"><span>补充说明（可选）</span><textarea id="generateNote" rows="2" placeholder="例如：功能模块章节按“新建→审核→归档”的顺序写"></textarea></label>
         <div class="row"><button class="primary" data-agent="generate">开始生成</button><button class="ghost" data-stop>停止</button><div class="spacer"></div><button data-run="docs">仅用脚本生成（不调用 AI）</button></div>
-        <p class="muted small">生成完成后会主动进入朱雀检测。已配置 Key 时由你确认后自动发送；未配置时保留本地材料，并提供网页检测入口。</p>
+        <p class="muted small">生成后自动检测全部正文；修改后只复检变化内容。配置 Key 时 API 优先，API 失败或未配置 Key 时自动打开网页检测。未完成的检测会保留待复核状态。</p>
       </div>
       <div class="card" id="zhusqueCard">
         <h3>朱雀检测状态</h3>
         <p id="zhusqueStatus" class="muted">正在检查本机配置…</p>
         <div class="row">
-          <button id="zhusqueRun" class="primary">立即检测当前材料</button>
-          <button id="zhusqueWeb" class="ghost">打开朱雀网页检测</button>
+          <button id="zhusqueRun" class="primary">检测 / 复检变化内容</button>
+          <button id="zhusqueRewrite" disabled>按朱雀任务单修改</button>
+          <button id="zhusqueWeb" class="ghost">打开朱雀网页</button>
           <button id="zhusqueKey" class="ghost">配置 API Key</button>
         </div>
         <p id="zhusqueHint" class="muted small"></p>
@@ -122,8 +123,8 @@
       </div>
       <div class="card">
         <h3>朱雀检测</h3>
-        <p id="zhusqueExportStatus" class="muted">生成材料后，必须完成一次朱雀检测并保留报告。</p>
-        <div class="row"><button id="zhusqueExportRun" class="primary">检测正式材料</button><button id="zhusqueExportWeb" class="ghost">没有 Key，打开网页检测</button><button id="zhusqueDecline" class="ghost">拒绝朱雀检测</button></div>
+        <p id="zhusqueExportStatus" class="muted">首次检测全部正文，修改后只复检变化内容；当前全文均有结果且风险占比符合阈值后才标记通过。</p>
+        <div class="row"><button id="zhusqueExportRun" class="primary">检测 / 复检变化内容</button><button id="zhusqueExportRewrite" disabled>按朱雀任务单修改</button><button id="zhusqueExportWeb" class="ghost">打开朱雀网页</button><button id="zhusqueDecline" class="ghost">拒绝朱雀检测</button></div>
       </div>
       <div class="card"><h3>产物</h3><div id="outputs" class="muted">暂无。</div></div>
       <div class="card board"><iframe id="board" title="看板"></iframe></div>

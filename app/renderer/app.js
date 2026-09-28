@@ -49,14 +49,15 @@ async function withRun(title, fn) {
   $('#logTitle').textContent = title;
   $('#busy').hidden = false;
   $('#logPane').classList.remove('collapsed');
-  $$('button[data-run],button[data-agent],#fillRun,#fillCheck').forEach(b => { b.disabled = true; });
+  $$('button[data-run],button[data-agent],#fillRun,#fillCheck,#zhusqueRun,#zhusqueExportRun,#zhusqueRewrite,#zhusqueExportRewrite,#zhusqueDecline').forEach(b => { b.disabled = true; });
   logEl.textContent = '';
   try {
     return await fn(currentRun);
   } finally {
     state.busy = false;
     $('#busy').hidden = true;
-    $$('button[data-run],button[data-agent],#fillRun,#fillCheck').forEach(b => { b.disabled = false; });
+    $$('button[data-run],button[data-agent],#fillRun,#fillCheck,#zhusqueRun,#zhusqueExportRun,#zhusqueDecline').forEach(b => { b.disabled = false; });
+    await refreshZhusqueStatus();
   }
 }
 
@@ -97,34 +98,45 @@ async function renderEnv() {
   await refreshZhusqueStatus();
 }
 
-async function refreshZhusqueStatus() {
+async function refreshZhusqueStatus(materialOutputs = null) {
   const status = await kit.zhusqueStatus();
   const text = $('#zhusqueStatus');
   const hint = $('#zhusqueHint');
   if (!text) return status;
   if (status.configured) {
-    text.innerHTML = '<span class="ok">已配置 Key，可自动检测</span>';
-    hint.textContent = '生成材料后，工具会自动发送正式说明材料到腾讯朱雀并保存检测报告。';
+    text.innerHTML = '<span class="ok">已配置 Key：API 优先，失败时自动尝试网页</span>';
+    hint.textContent = '首次覆盖全部正文；修改后只检测变化内容并合并历史结果。网页遇验证码、登录或额度限制时保留待复核状态。';
     $('#zhusqueKey').textContent = '更换 API Key';
   } else {
-    text.innerHTML = '<span class="warn">尚未配置 Key，当前材料不会自动完成朱雀检测</span>';
-    hint.innerHTML = '请先获取 Key：点击“获取 Key”打开 EdgeOne Makers；暂不配置时可点击“打开朱雀网页检测”手动上传。';
+    text.innerHTML = '<span class="warn">未配置 Key：自动打开浏览器进行朱雀检测</span>';
+    hint.textContent = '首次覆盖全部正文；修改后只检测变化内容。网页遇验证码或登录时请在打开的浏览器中处理；额度不足的内容保留待复核，不会标记完成。';
     $('#zhusqueKey').textContent = '获取 / 配置 API Key';
   }
+  let current = null;
   if ($('#zhusqueExportStatus')) {
     const p = project();
-    const z = state.cfg && p ? await kit.outputs(state.repo).then(o => o.projects.find(x => x.id === p.id)?.zhusque) : null;
+    const o = state.cfg && p ? materialOutputs || await kit.outputs(state.repo) : null;
+    const z = o?.projects.find(x => x.id === p?.id)?.zhusque;
+    current = z;
     $('#zhusqueExportStatus').innerHTML = z?.checked
-      ? '<span class="ok">已完成朱雀检测，报告已保存</span>'
+      ? '<span class="ok">当前全文已覆盖，朱雀风险占比符合阈值，报告已保存</span>'
       : z?.waived
         ? `<span class="warn">用户已明确拒绝 ${z.declines} 次，按豁免放行（材料未经朱雀检测）</span>`
       : z?.declines
         ? `<span class="warn">朱雀检测是必需步骤；已记录拒绝 ${z.declines}/2 次，再次明确拒绝才会豁免</span>`
       : z?.stale
-        ? '<span class="warn">正文或正式 PDF 已变化，旧朱雀报告已失效，请重新检测</span>'
+        ? '<span class="warn">正文已变化，请复检变化内容；未变部分复用历史检测结果</span>'
+      : z?.report
+        ? '<span class="warn">已有检测报告，但当前正文尚未通过完整复核；请查看报告和日志中的待处理内容</span>'
         : '<span class="warn">尚未完成朱雀检测，不能把材料当作终稿上传</span>';
   }
-  return status;
+  for (const button of $$('#zhusqueRewrite,#zhusqueExportRewrite')) {
+    button.disabled = state.busy || !current?.can_rewrite;
+    button.title = current?.can_rewrite
+      ? '仅修改当前朱雀任务单标记的内容，完成后自动增量复核'
+      : '完成当前正文检测并生成需修改任务单后可用；待检测或过期报告不可直接改写';
+  }
+  return { ...status, current };
 }
 
 async function guideZhusqueKey() {
@@ -142,19 +154,69 @@ async function openZhusqueWeb() { await kit.openExternal(ZHUSQUE_WEB_URL); }
 
 async function runZhusque(id, announce = true) {
   if (!state.repo || !state.pid) return { code: -1 };
-  const status = await kit.zhusqueStatus();
-  if (!status.configured) {
-    const open = confirm('尚未配置朱雀 API Key。点击“确定”获取 Key，或取消后使用“打开朱雀网页检测”手动上传。');
-    if (open) await guideZhusqueKey();
-    await refreshZhusqueStatus();
-    return { code: 2, skipped: true };
-  }
   if (announce) logEl.appendChild(Object.assign(document.createElement('span'), {
-    className: 'cmd', textContent: '\n开始朱雀正式检测（仅发送正式说明材料，不发送源程序 PDF）…\n',
+    className: 'cmd', textContent: '\n开始朱雀复核：首次覆盖全部正文，后续只检测变化内容。API 优先，无 Key 或 API 失败时自动尝试网页…\n',
   }));
   const result = await kit.run(id, 'zhusque', state.repo, state.pid);
-  await refreshZhusqueStatus();
-  return result;
+  const status = await refreshZhusqueStatus();
+  const verified = result?.code === 0 && status.current?.checked === true;
+  if (!verified) logEl.appendChild(Object.assign(document.createElement('span'), {
+    className: 'warn', textContent: '\n材料仍待复核。已完成部分会保留；请根据报告修改风险段落，或处理浏览器提示后再次复检变化内容。\n',
+  }));
+  const nav = $('#nav a[data-view="generate"]');
+  if (nav) nav.classList.toggle('done', verified);
+  return { ...result, verified };
+}
+
+async function reviewRevision(id) {
+  if (dirty) {
+    logEl.appendChild(Object.assign(document.createElement('span'), {
+      className: 'warn', textContent: '\n编辑器有未保存的修改，请先保存后再复检，确保检测的是当前正文。\n',
+    }));
+    return { code: 2, pending: true, verified: false };
+  }
+  const o = await kit.outputs(state.repo);
+  const current = o.projects.find(p => p.id === state.pid);
+  if (current?.pdfs?.some(file => file.includes('软件说明'))) {
+    logEl.appendChild(Object.assign(document.createElement('span'), {
+      className: 'cmd', textContent: '\n正文修改完成，先同步正式 PDF，再复检变化内容…\n',
+    }));
+    const pdf = await kit.run(id, 'pdf', state.repo, state.pid);
+    if (pdf?.code !== 0) {
+      logEl.appendChild(Object.assign(document.createElement('span'), {
+        className: 'warn', textContent: '\n正式 PDF 更新失败，本轮保持待复核；修复导出问题后再复检。\n',
+      }));
+      $('#nav a[data-view="generate"]')?.classList.remove('done');
+      await refreshZhusqueStatus();
+      return { ...pdf, verified: false };
+    }
+  }
+  return runZhusque(id);
+}
+
+async function rewriteZhusque(id) {
+  if (dirty) {
+    logEl.appendChild(Object.assign(document.createElement('span'), {
+      className: 'warn', textContent: '\n编辑器有未保存的修改，请先保存并复检变化内容，再按新任务单修改。\n',
+    }));
+    return { code: 2, pending: true };
+  }
+  const o = await kit.outputs(state.repo);
+  const current = o.projects.find(p => p.id === state.pid)?.zhusque;
+  if (!current?.can_rewrite) {
+    logEl.appendChild(Object.assign(document.createElement('span'), {
+      className: 'warn', textContent: '\n请先完成当前正文检测。待检测内容或过期任务单不能直接用于改写。\n',
+    }));
+    return { code: 2, pending: true };
+  }
+  const result = await kit.agent(id, 'revise', state.repo, {
+    projectId: state.pid,
+    zhusqueOnly: true,
+    note: '按当前朱雀改写任务单修改有源码依据的风险段落；只做本轮标记内容修改，保持未标记正文不变，同步受影响章节。',
+  });
+  if (!result?.ok) return result;
+  await loadDoc();
+  return reviewRevision(id);
 }
 
 $('#installPy').onclick = async () => {
@@ -256,11 +318,11 @@ $$('button[data-agent]').forEach(btn => btn.addEventListener('click', () => {
     state.cfg = await kit.loadConfig(state.repo);
     if (!state.cfg.projects.find(p => p.id === state.pid)) state.pid = state.cfg.projects[0]?.id;
     renderRepoCard(); renderModules(); renderProjectSelect();
-    if (task === 'revise') loadDoc();
+    if (task === 'revise') await loadDoc();
     if (r?.ok) {
-      if (task === 'generate') {
-        const detection = await runZhusque(id);
-        if (detection?.code === 0) markDone('generate');
+      if (task === 'generate' || task === 'revise') {
+        const detection = task === 'revise' ? await reviewRevision(id) : await runZhusque(id);
+        if (detection?.verified) markDone('generate');
       } else if (task === 'analyze') {
         markDone('analyze');
       }
@@ -334,6 +396,8 @@ $('#saveDoc').onclick = async () => {
   if (!state.repo || !state.pid) return;
   await kit.writeFile(state.repo, docRel(), $('#docText').value);
   dirty = false;
+  $('#nav a[data-view="generate"]')?.classList.remove('done');
+  await refreshZhusqueStatus();
   $('#saveDoc').textContent = '已保存';
   setTimeout(() => { $('#saveDoc').textContent = '保存'; }, 1200);
 };
@@ -361,6 +425,7 @@ async function refreshOutputs() {
       </ul></div>`).join('') + (o.missingInfo ? '<p class="warn">存在缺失信息，见 缺失信息清单.md，或在“基本信息”中补充。</p>' : '');
   box.querySelectorAll('[data-open]').forEach(b => { b.onclick = () => kit.openPath(b.dataset.open); });
   $('#board').src = o.dashboard ? `file://${encodeURI(o.dashboard)}?t=${Date.now()}` : 'about:blank';
+  await refreshZhusqueStatus(o);
 }
 
 // ---------------------------------------------------------------- 设置
@@ -380,8 +445,10 @@ $('#settings').addEventListener('close', async () => {
 $('#openZhusqueConsole').onclick = e => { e.preventDefault(); guideZhusqueKey(); };
 $('#zhusqueKey').onclick = () => guideZhusqueKey();
 $('#zhusqueWeb').onclick = () => openZhusqueWeb();
-$('#zhusqueRun').onclick = () => withRun('朱雀正式检测', id => runZhusque(id));
-$('#zhusqueExportRun').onclick = () => withRun('检测正式材料', id => runZhusque(id));
+$('#zhusqueRun').onclick = () => withRun('朱雀检测 / 复检变化内容', id => reviewRevision(id));
+$('#zhusqueExportRun').onclick = () => withRun('朱雀检测 / 复检变化内容', id => reviewRevision(id));
+$('#zhusqueRewrite').onclick = () => withRun('按朱雀任务单修改并增量复核', id => rewriteZhusque(id));
+$('#zhusqueExportRewrite').onclick = () => withRun('按朱雀任务单修改并增量复核', id => rewriteZhusque(id));
 $('#zhusqueExportWeb').onclick = () => openZhusqueWeb();
 $('#zhusqueDecline').onclick = () => withRun('记录拒绝朱雀检测', async id => {
   if (!state.repo || !state.pid) return { code: -1 };

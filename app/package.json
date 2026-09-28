@@ -25,6 +25,7 @@
       "preload.js",
       "agent.js",
       "bash-policy.js",
+      "zhusque-flow.js",
       "renderer/**",
       "package.json",
       "!node_modules/@anthropic-ai/claude-agent-sdk-*/**"

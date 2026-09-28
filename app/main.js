@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn, execFileSync } = require('child_process');
 const { runAgent } = require('./agent');
+const { finalizeTask, browserRuntimeEnv, verifiedStatus, canRewrite } = require('./zhusque-flow');
 
 // 开发时直接用仓库里的 scripts；打包后用 Resources/kit（见 package.json extraResources）
 const KIT = app.isPackaged ? path.join(process.resourcesPath, 'kit') : path.resolve(__dirname, '..');
@@ -158,7 +159,29 @@ async function runPy(id, repo, script, args) {
     return { code: -1 };
   }
   return runProcess(id, py, [path.join(SCRIPTS, script), ...args], {
-    cwd: repo, env: zhusqueEnv(),
+    cwd: repo, env: { ...zhusqueEnv(), ...browserRuntimeEnv(process.execPath, __dirname) },
+  });
+}
+
+// 与 CLI 使用同一份内容指纹校验；不能用文件时间或“报告存在”代替检测通过。
+async function readZhusqueStates(projectDirs) {
+  const py = findPython();
+  if (!py || !projectDirs.length) return {};
+  return new Promise(resolve => {
+    const source = 'import json,sys; sys.path.insert(0,sys.argv[1]); '
+      + 'from artifact_manifest import _zhusque_status; '
+      + 'print(json.dumps({p:_zhusque_status(p) for p in sys.argv[2:]}))';
+    const child = spawn(py, ['-c', source, SCRIPTS, ...projectDirs], { env: env() });
+    let stdout = '';
+    const timer = setTimeout(() => { child.kill(); resolve({}); }, 15000);
+    child.stdout.on('data', d => { stdout += d.toString(); });
+    child.stderr.on('data', () => {});
+    child.on('error', () => { clearTimeout(timer); resolve({}); });
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (code !== 0) { resolve({}); return; }
+      try { resolve(JSON.parse(stdout)); } catch { resolve({}); }
+    });
   });
 }
 
@@ -181,10 +204,11 @@ function ensureConfig(repo) {
   return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
 
-function outputs(repo) {
+async function outputs(repo) {
   const cfg = fs.existsSync(cfgPath(repo)) ? JSON.parse(fs.readFileSync(cfgPath(repo), 'utf8')) : { projects: [] };
   const root = path.join(repo, OUTPUT);
   const list = f => (fs.existsSync(f) ? fs.readdirSync(f) : []);
+  const zhusqueStates = await readZhusqueStates((cfg.projects || []).map(p => path.join(root, p.id)));
   return {
     root,
     dashboard: fs.existsSync(path.join(root, '看板.html')) ? path.join(root, '看板.html') : null,
@@ -196,20 +220,7 @@ function outputs(repo) {
         .filter(n => n.endsWith('.pdf') && !n.includes('作废')).map(n => (sub ? `${sub}/${n}` : n)));
       const markerPath = path.join(d, '.zhusque-final.json');
       const reportPath = path.join(d, '朱雀检测报告.md');
-      let zhusqueFresh = fs.existsSync(markerPath) && fs.existsSync(reportPath);
-      if (zhusqueFresh) {
-        try {
-          const markerTime = fs.statSync(markerPath).mtimeMs;
-          const materialFiles = [
-            path.join(d, '软件说明书.md'),
-            path.join(d, '申请表填报文案.md'),
-            path.join(d, 'auto-fill', 'config.json'),
-            ...pdfs.filter(n => n.includes('软件说明')).map(n => path.join(d, n)),
-          ];
-          zhusqueFresh = materialFiles.filter(fs.existsSync)
-            .every(f => fs.statSync(f).mtimeMs <= markerTime);
-        } catch { zhusqueFresh = false; }
-      }
+      const zhusqueState = verifiedStatus(zhusqueStates[d]);
       let declines = 0;
       try {
         const raw = JSON.parse(fs.readFileSync(path.join(d, '.zhusque-declined.json'), 'utf8'));
@@ -220,10 +231,11 @@ function outputs(repo) {
         manual: fs.existsSync(path.join(d, '软件说明书.md')),
         form: fs.existsSync(path.join(d, 'auto-fill', 'config.json')),
         zhusque: {
-          checked: zhusqueFresh,
+          ...zhusqueState,
+          can_rewrite: canRewrite(zhusqueState, fs.existsSync(path.join(d, '朱雀改写任务单.md'))),
           report: fs.existsSync(reportPath),
           marker: fs.existsSync(markerPath),
-          stale: !zhusqueFresh && fs.existsSync(markerPath) && fs.existsSync(reportPath),
+          stale: zhusqueState.content_match === false && fs.existsSync(markerPath),
           declines,
           waived: declines >= ZHUSQUE_DECLINE_THRESHOLD,
         },
@@ -252,14 +264,7 @@ ipcMain.handle('file:read', (_e, repo, rel) => {
 });
 ipcMain.handle('file:write', (_e, repo, rel, text) => {
   fs.writeFileSync(materialFile(repo, rel), text);
-  // 说明书或申请表发生编辑后，旧朱雀报告不再对应当前正文。
-  if (['软件说明书.md', '申请表填报文案.md'].includes(path.basename(rel))) {
-    const projectDir = path.dirname(materialFile(repo, rel));
-    for (const stale of ['.zhusque-final.json', '朱雀检测报告.md']) {
-      const f = path.join(projectDir, stale);
-      if (fs.existsSync(f)) fs.unlinkSync(f);
-    }
-  }
+  // 保留历史检测证据。outputs 重新计算正文指纹，发生编辑即显示待复核。
   return true;
 });
 
@@ -300,8 +305,7 @@ const SCRIPT_TASKS = {
   pdf: repo => ['render_pdfs.py', ['--config', CFG, '--repo', repo]],
   form: repo => ['application_form.py', ['--config', CFG]],
   aigc: (repo, pid) => ['aigc_check.py', [path.join(repo, OUTPUT, pid), '--report', path.join(repo, OUTPUT, pid, 'AIGC检测报告.md')]],
-  zhusque: (repo, pid) => ['zhusque_check.py', ['finalize', path.join(repo, OUTPUT, pid), '--allow-upload',
-    '--report', path.join(repo, OUTPUT, pid, '朱雀检测报告.md')]],
+  zhusque: (repo, pid) => finalizeTask(path.join(repo, OUTPUT, pid)),
   // 只有用户在界面上逐次确认拒绝后才调用；累计 2 次才豁免，豁免不等于已检测
   zhusqueDecline: (repo, pid) => ['zhusque_check.py', ['decline', path.join(repo, OUTPUT, pid),
     '--reason', '用户在桌面 App 中确认拒绝朱雀检测', '--source', 'app', '--user-declined']],
@@ -375,6 +379,13 @@ ipcMain.handle('screenshot-dir', (_e, repo, pid) => {
 });
 
 ipcMain.handle('agent:run', async (_e, id, task, repo, extra) => {
+  if (task === 'revise' && extra?.zhusqueOnly) {
+    const current = (await outputs(repo)).projects.find(p => p.id === extra.projectId)?.zhusque;
+    if (!current?.can_rewrite) {
+      log(id, '朱雀任务单尚不适用于当前正文：请先完成检测，确保无待检测内容，再修改标记段落。\n', 'err');
+      return { ok: false, pending: true };
+    }
+  }
   const claude = findClaude();
   if (!claude) {
     log(id, '找不到本机 Claude Code（claude 命令）。请先安装并登录，或在设置里填写 claude 可执行文件路径。\n', 'err');
