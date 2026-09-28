@@ -239,10 +239,10 @@ def render_source_pdf(root, project, config, repo=None):
         if collected["missing"]:
             print(f"[{project['name']}] 缺失 {len(collected['missing'])} 个源码文件："
                   + "、".join(collected["missing"]), file=sys.stderr)
-        need = collected["pages"] * collected["lines_per_page"]
-        if len(collected["lines"]) < need:
-            print(f"[{project['name']}] 警告：可用代码 {len(collected['lines'])} 行，不足 {need} 行",
-                  file=sys.stderr)
+        configured = int(project.get("source_pages", 60))
+        if collected["pages"] < configured:
+            print(f"[{project['name']}] 自有代码 {len(collected['lines'])} 行，不足 {configured} 页，"
+                  f"按规则全部提交，共 {collected['pages']} 页（不重复、不补空行）", file=sys.stderr)
     final_dir = submission_dir(d)
     final_dir.mkdir(parents=True, exist_ok=True)
     pdf = final_dir / source_material_pdf_name(project)

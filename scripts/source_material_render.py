@@ -7,6 +7,8 @@ PDF 路径不依赖 python-docx 或办公软件，交给 Chromium 负责分页�
 
 from __future__ import annotations
 
+import math
+
 from html import escape
 from pathlib import Path
 
@@ -55,15 +57,18 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
 
 
 def select_source_lines(lines, project):
-    """按软著常用首尾取材规则补齐固定页数。"""
+    """按软著首尾取材规则选取源程序行。
+
+    代码超过配置页数时取前 N/2 页和后 N/2 页；不足时全部提交、按实际页数计，
+    绝不重复代码、绝不补空行凑页数。
+    """
     lines_per_page = int(project.get("lines_per_page", 90))
     pages = int(project.get("source_pages", 60))
+    if len(lines) <= pages * lines_per_page:
+        return list(lines), max(1, math.ceil(len(lines) / lines_per_page)), lines_per_page
     front_pages = pages // 2
     back_pages = pages - front_pages
-    need = pages * lines_per_page
     selected = lines[: front_pages * lines_per_page] + lines[-back_pages * lines_per_page :]
-    while len(selected) < need:
-        selected.append("")
     return selected, pages, lines_per_page
 
 
@@ -156,3 +161,17 @@ def write_source_html_from_config(repo, config, project, out_path, cli_keep_comm
                                   cli_keep_imports=False):
     tokens = own_tokens(config, repo)
     return write_source_html(repo, project, out_path, tokens, cli_keep_comments, cli_keep_imports)
+
+
+def expected_source_pages(project_dir, project):
+    """源程序 PDF 应有页数：代码不足配置页数且已全部提交时，以实际页数为准。"""
+    configured = int(project.get("source_pages", 60))
+    record = Path(project_dir) / "源程序提取" / "源程序取材记录.json"
+    try:
+        import json
+        data = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return configured, False
+    if data.get("complete") is True and isinstance(data.get("pages"), int) and 0 < data["pages"] <= configured:
+        return data["pages"], True
+    return configured, False

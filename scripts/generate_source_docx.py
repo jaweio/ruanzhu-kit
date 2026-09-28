@@ -75,7 +75,7 @@ def add_page(doc, page_lines, lines_per_page, font_size_pt, row_height_pt):
         p = cell.paragraphs[0]
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after = Pt(0)
-        run = p.add_run(page_lines[i] or " ")
+        run = p.add_run((page_lines[i] if i < len(page_lines) else "") or " ")
         run.font.size = Pt(font_size_pt)
 
 
@@ -87,6 +87,8 @@ def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_k
     collected = collect_source_material(repo, project, tokens, cli_keep_comments, cli_keep_imports)
     lines = collected["lines"]
     selected = collected["selected"]
+    # 代码不足配置页数时按实际页数输出（全部提交，不重复、不补空行）
+    configured_pages, pages = pages, collected["pages"]
     missing = collected["missing"]
     skipped = collected["skipped"]
     scrub_stats = collected["stats"]
@@ -95,12 +97,12 @@ def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_k
     trim_comments = collected["trim_comments"]
     trim_imports = collected["trim_imports"]
     max_blank_lines = collected["max_blank_lines"]
-    need = pages * lines_per_page
+    need = configured_pages * lines_per_page
     if skipped:
         print(f"[{project['name']}] 跳过 {len(skipped)} 个第三方文件：" + "、".join(r for r, _ in skipped), file=sys.stderr)
     if len(lines) < need:
-        print(f"[{project['name']}] 警告：可用代码 {len(lines)} 行，不足 {need} 行（{pages} 页），请补充自研文件",
-              file=sys.stderr)
+        print(f"[{project['name']}] 自有代码 {len(lines)} 行，不足 {configured_pages} 页，按规则全部提交，共 {pages} 页"
+              "（不重复、不补空行）", file=sys.stderr)
     doc = Document()
     section = doc.sections[0]
     section.page_width = Cm(21)
@@ -126,6 +128,10 @@ def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_k
         build_source_html(project, selected, pages, lines_per_page),
         encoding="utf-8",
     )
+    (out_dir / "源程序取材记录.json").write_text(json.dumps({
+        "pages": pages, "configured_pages": configured_pages, "lines_per_page": lines_per_page,
+        "code_lines": len(lines), "complete": len(lines) <= configured_pages * lines_per_page,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "源程序DOCX生成报告.md").write_text(
         f"# {project['name']} 源程序 DOCX 生成报告\n\n"
         f"- 输出文件：`{out_path.name}`\n"
@@ -142,7 +148,7 @@ def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_k
         f"连续空行已压缩（最多 {max_blank_lines} 行）\n"
         f"- 自动跳过的第三方文件：{len(skipped)} 个\n"
         + "".join(f"  - `{r}`：{why}\n" for r, why in skipped)
-        + f"- 可用代码行数：{len(lines)}（需要 {need}）\n",
+        + f"- 可用代码行数：{len(lines)}（配置 {configured_pages} 页需要 {need} 行；不足时全部提交，不重复、不补空行）\n",
         encoding="utf-8",
     )
     print(out_path)

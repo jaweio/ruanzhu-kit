@@ -33,7 +33,9 @@ class SourceMaterialRenderTests(unittest.TestCase):
         result = collect_source_material(self.repo, self.project)
         self.assertEqual(result["pages"], 2)
         self.assertEqual(result["lines_per_page"], 3)
-        self.assertEqual(len(result["selected"]), 6)
+        # 代码只有 4 行（不足 2 页×3 行），按规则全部提交一次，不补空行凑满 6 行
+        self.assertEqual(result["selected"], result["lines"])
+        self.assertEqual(len(result["selected"]), 4)
         self.assertIn('const label = "中文 <标签>";', result["lines"])
 
     def test_html_escapes_code_and_has_one_section_per_page(self):

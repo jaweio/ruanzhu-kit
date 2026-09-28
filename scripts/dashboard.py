@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from aigc_check import HIGH, LOW, analyze  # noqa: E402
 from copyright_check import Findings, check_materials, check_project, check_sources  # noqa: E402
+from source_material_render import expected_source_pages  # noqa: E402
 from artifact_manifest import formal_material_paths, _zhusque_status  # noqa: E402
 from jev_check import evaluate_material  # noqa: E402
 from output_names import (manual_pdf_name, source_material_docx_name,
@@ -279,8 +280,14 @@ def build(cfg_path, repo, cfg, *, jev=False, allow_upload=False):
         if not m["源程序页数"]:
             p["todos"].append(("medium", "源程序 PDF 未生成",
                                cmd("generate_source_docx.py", f"--config {cfg_path} --repo {repo}") + " && " + cmd("render_pdfs.py", f"--config {cfg_path}")))
-        elif m["源程序页数"] < 60:
-            p["todos"].append(("high", f"源程序只有 {m['源程序页数']} 页，不足 60 页", "在 config 补选自研文件后重新提取"))
+        else:
+            expected, complete = expected_source_pages(root / p["id"], project)
+            if m["源程序页数"] < expected:
+                p["todos"].append(("high", f"源程序 PDF 只有 {m['源程序页数']} 页，应为 {expected} 页",
+                                   "重新运行 generate_source_docx.py 和 render_pdfs.py"))
+            elif complete:
+                p["todos"].append(("low", f"自有代码不足 {project.get('source_pages', 60)} 页，已全部提交共 {expected} 页",
+                                   "符合规则：不足 60 页时提交全部源程序，不重复、不补空行"))
         if p.get("jev") and not p["jev"]["gate"]["passed"]:
             gate = p["jev"]["gate"]
             p["todos"].append((
