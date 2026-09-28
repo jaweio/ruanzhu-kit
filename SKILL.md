@@ -287,7 +287,7 @@ python3 scripts/generate_source_docx.py \
 "source_material": {
   "trim_comments": true,
   "trim_imports": true,
-  "max_blank_lines": 1
+  "max_blank_lines": 0
 }
 ```
 
@@ -904,7 +904,7 @@ python3 scripts/dashboard.py --config soft-copyright-materials/ruanzhu.config.js
 
 ## 源程序材料标准
 
-- 竖向 A4，每页至少 50 行；代码超过 60 页时取前 30 页 + 后 30 页，共 60 页
+- 竖向 A4，**每页至少 50 行代码并排满整页**（行高按页面高度自动计算，默认去掉空行、注释和导入）；代码超过 60 页时取前 30 页 + 后 30 页，共 60 页
 - **代码不足 60 页时全部提交，按实际页数计；禁止重复代码、补空行或凑页数**
 - 多份软著页数建议不同（60、62、64 页）
 - 每页右上角标注阿拉伯数字页码；不添加代码行号和分隔符

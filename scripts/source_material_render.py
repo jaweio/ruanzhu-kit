@@ -56,13 +56,39 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
     return lines, missing, skipped, stats
 
 
+MIN_LINES_PER_PAGE = 50
+# A4 竖向，页边距 上 12mm（页码）/ 下 6.5mm / 左右 10mm；DOCX 边距更小，同一行高两边都能排满
+PAGE_BODY_HEIGHT_PT = (297 - 12 - 6.5) / 25.4 * 72 - 4
+PAGE_BODY_WIDTH_PT = (210 - 20) / 25.4 * 72
+MONO_CHAR_WIDTH = 0.6  # 等宽字体字符宽度约为字号的 0.6 倍（中文按 2 个字符计）
+
+
+def page_lines(project):
+    """每页代码行数：至少 50 行。"""
+    return max(MIN_LINES_PER_PAGE, int(project.get("lines_per_page", 90)))
+
+
+def page_metrics(project, selected_lines):
+    """行高按“可用高度 ÷ 每页行数”计算，保证每页从上排到下，不留半页空白；
+    字号随行高放大，但不超过页宽能容纳最长行的大小，也不超过 10pt。"""
+    per_page = page_lines(project)
+    row_height = round(PAGE_BODY_HEIGHT_PT / per_page, 2)
+    widest = max((sum(2 if ord(ch) > 0x2E80 else 1 for ch in line) for line in selected_lines), default=1)
+    fit_width = PAGE_BODY_WIDTH_PT / (MONO_CHAR_WIDTH * max(widest, 60))
+    font_size = project.get("source_font_size")
+    if font_size is None:
+        font_size = min(row_height * 0.8, fit_width, 10.0)
+    font_size = round(max(5.5, min(float(font_size), row_height * 0.9)), 2)
+    return row_height, font_size
+
+
 def select_source_lines(lines, project):
     """按软著首尾取材规则选取源程序行。
 
     代码超过配置页数时取前 N/2 页和后 N/2 页；不足时全部提交、按实际页数计，
     绝不重复代码、绝不补空行凑页数。
     """
-    lines_per_page = int(project.get("lines_per_page", 90))
+    lines_per_page = page_lines(project)
     pages = int(project.get("source_pages", 60))
     if len(lines) <= pages * lines_per_page:
         return list(lines), max(1, math.ceil(len(lines) / lines_per_page)), lines_per_page
@@ -83,7 +109,7 @@ def collect_source_material(repo, project, tokens=(), cli_keep_comments=False,
         trim_comments = False
     if cli_keep_imports:
         trim_imports = False
-    max_blank_lines = max(0, min(int(source_material.get("max_blank_lines", 1)), 3))
+    max_blank_lines = max(0, min(int(source_material.get("max_blank_lines", 0)), 3))
     lines, missing, skipped, stats = read_lines(
         repo, project.get("source_files", []), project.get("redact", True), tokens,
         project.get("scrub_open_source", True), trim_comments, trim_imports, max_blank_lines,
@@ -105,8 +131,7 @@ def collect_source_material(repo, project, tokens=(), cli_keep_comments=False,
 
 def build_source_html(project, selected_lines, pages, lines_per_page):
     """生成只包含代码页的可打印 HTML，不显示标题、页眉或页脚。"""
-    font_size = float(project.get("source_font_size", 6.5))
-    row_height = float(project.get("source_row_height", 8.15))
+    row_height, font_size = page_metrics(project, selected_lines)
     body = []
     for page in range(pages):
         body.append('<section class="source-page">')

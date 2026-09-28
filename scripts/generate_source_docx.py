@@ -13,7 +13,7 @@ from docx.shared import Cm, Pt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from oss_scrub import own_tokens  # noqa: E402
-from source_material_render import build_source_html, collect_source_material, read_lines  # noqa: E402
+from source_material_render import page_metrics, build_source_html, collect_source_material, read_lines  # noqa: E402
 from output_names import source_material_docx_name, source_material_html_name  # noqa: E402
 
 
@@ -80,11 +80,11 @@ def add_page(doc, page_lines, lines_per_page, font_size_pt, row_height_pt):
 
 
 def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_keep_imports=False):
-    lines_per_page = int(project.get("lines_per_page", 90))
     pages = int(project.get("source_pages", 60))
-    font_size = float(project.get("source_font_size", 6.5))
-    row_height = float(project.get("source_row_height", 8.15))
     collected = collect_source_material(repo, project, tokens, cli_keep_comments, cli_keep_imports)
+    lines_per_page = collected["lines_per_page"]
+    # 与 PDF 共用行高/字号：每页排满、至少 50 行
+    row_height, font_size = page_metrics(project, collected["selected"])
     lines = collected["lines"]
     selected = collected["selected"]
     # 代码不足配置页数时按实际页数输出（全部提交，不重复、不补空行）

@@ -31,8 +31,9 @@ class SourceMaterialRenderTests(unittest.TestCase):
 
     def test_collect_and_selects_fixed_pages(self):
         result = collect_source_material(self.repo, self.project)
-        self.assertEqual(result["pages"], 2)
-        self.assertEqual(result["lines_per_page"], 3)
+        # 每页至少 50 行：配置的 3 行被提升为 50，4 行代码只占 1 页
+        self.assertEqual(result["pages"], 1)
+        self.assertEqual(result["lines_per_page"], 50)
         # 代码只有 4 行（不足 2 页×3 行），按规则全部提交一次，不补空行凑满 6 行
         self.assertEqual(result["selected"], result["lines"])
         self.assertEqual(len(result["selected"]), 4)
@@ -41,7 +42,7 @@ class SourceMaterialRenderTests(unittest.TestCase):
     def test_html_escapes_code_and_has_one_section_per_page(self):
         result = collect_source_material(self.repo, self.project)
         html = build_source_html(self.project, result["selected"], result["pages"], result["lines_per_page"])
-        self.assertEqual(html.count('<section class="source-page">'), 2)
+        self.assertEqual(html.count('<section class="source-page">'), 1)
         self.assertIn("中文 &lt;标签&gt;", html)
         self.assertNotIn("LibreOffice", html)
 

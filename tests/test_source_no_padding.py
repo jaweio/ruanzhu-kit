@@ -39,6 +39,22 @@ class SourceNoPaddingTests(unittest.TestCase):
             self.assertEqual(expected_source_pages(td, project), (24, True))
 
 
+class SourcePageFillTests(unittest.TestCase):
+    def test_rows_fill_the_page_and_at_least_50_lines(self):
+        from source_material_render import page_metrics, page_lines, PAGE_BODY_HEIGHT_PT
+        for per_page in (30, 50, 60, 90):
+            project = {"lines_per_page": per_page}
+            n = page_lines(project)
+            self.assertGreaterEqual(n, 50)
+            row, font = page_metrics(project, ["x" * 80])
+            self.assertAlmostEqual(row * n, PAGE_BODY_HEIGHT_PT, delta=1.0)  # 从上排到下，不留半页空白
+            self.assertLessEqual(font, row)
+
+    def test_blank_lines_removed_by_default(self):
+        import inspect, source_material_render
+        self.assertIn('get("max_blank_lines", 0)', inspect.getsource(source_material_render.collect_source_material))
+
+
 class SourcePageNumberTests(unittest.TestCase):
     def test_source_pdf_has_top_right_page_number(self):
         from source_material_render import build_source_html

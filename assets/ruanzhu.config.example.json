@@ -85,7 +85,7 @@
       "source_material": {
         "trim_comments": true,
         "trim_imports": true,
-        "max_blank_lines": 1
+        "max_blank_lines": 0
       },
       "extra_chapters": [],
       "modules": [],

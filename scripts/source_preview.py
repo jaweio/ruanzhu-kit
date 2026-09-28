@@ -55,7 +55,7 @@ def collect_project(repo, project, tokens=(), trim_comments=True, trim_imports=T
         source_material = {}
     trim_comments = source_material.get("trim_comments", True) if trim_comments is None else trim_comments
     trim_imports = source_material.get("trim_imports", True) if trim_imports is None else trim_imports
-    max_blank_lines = source_material.get("max_blank_lines", 1) if max_blank_lines is None else max_blank_lines
+    max_blank_lines = source_material.get("max_blank_lines", 0) if max_blank_lines is None else max_blank_lines
     max_blank_lines = max(0, min(int(max_blank_lines), 3))
     rows = []
     for rel in project.get("source_files", []) or []:
