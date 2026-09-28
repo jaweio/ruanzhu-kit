@@ -18,6 +18,9 @@ from oss_scrub import own_tokens, scrub_code, third_party_reasons  # noqa: E402
 from source_material import compact_blank_lines, strip_comments, strip_imports  # noqa: E402
 
 
+from source_material_render import page_lines  # noqa: E402
+
+
 def esc(value):
     return html.escape(str(value))
 
@@ -81,7 +84,7 @@ def collect_project(repo, project, tokens=(), trim_comments=True, trim_imports=T
         "id": project.get("id", project.get("name", "未命名项目")),
         "name": project.get("name", project.get("id", "未命名项目")),
         "source_pages": int(project.get("source_pages", 60)),
-        "lines_per_page": int(project.get("lines_per_page", 90)),
+        "lines_per_page": page_lines(project),
         "trim_comments": bool(trim_comments),
         "trim_imports": bool(trim_imports),
         "max_blank_lines": max_blank_lines,
@@ -96,8 +99,9 @@ def collect_project(repo, project, tokens=(), trim_comments=True, trim_imports=T
             "comments": sum(row["comments"] for row in rows),
             "imports": sum(row["imports"] for row in rows),
             "blank_lines": sum(row["blank_lines"] for row in rows),
-            "estimated_pages": math.ceil(sum(row["material_lines"] for row in rows) /
-                                         max(1, int(project.get("lines_per_page", 90)))),
+            # 与正式材料同一规则：每页 50 行；超过配置页数时只取首尾共 source_pages 页（长行折行会略增页数）
+            "estimated_pages": min(int(project.get("source_pages", 60)),
+                                   math.ceil(sum(row["material_lines"] for row in rows) / page_lines(project))),
         },
     }
 

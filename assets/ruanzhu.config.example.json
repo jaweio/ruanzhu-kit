@@ -81,7 +81,7 @@
       "tests": [],
       "api_examples": [],
       "source_pages": 60,
-      "lines_per_page": 90,
+      "lines_per_page": 50,
       "source_material": {
         "trim_comments": true,
         "trim_imports": true,

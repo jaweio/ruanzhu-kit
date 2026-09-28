@@ -13,7 +13,7 @@ from docx.shared import Cm, Pt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from oss_scrub import own_tokens  # noqa: E402
-from source_material_render import page_metrics, build_source_html, collect_source_material, read_lines  # noqa: E402
+from source_material_render import MARGIN_MM, page_metrics, build_source_html, collect_source_material, read_lines  # noqa: E402
 from output_names import source_material_docx_name, source_material_html_name  # noqa: E402
 
 
@@ -69,7 +69,7 @@ def add_page(doc, page_lines, lines_per_page, font_size_pt, row_height_pt):
         row.height = Pt(row_height_pt)
         row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
         cell = row.cells[0]
-        cell.width = Cm(19)
+        cell.width = Cm((210 - MARGIN_MM["left"] - MARGIN_MM["right"]) / 10)
         set_cell_no_wrap(cell)
         set_cell_margins(cell)
         p = cell.paragraphs[0]
@@ -84,7 +84,7 @@ def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_k
     collected = collect_source_material(repo, project, tokens, cli_keep_comments, cli_keep_imports)
     lines_per_page = collected["lines_per_page"]
     # 与 PDF 共用行高/字号：每页排满、至少 50 行
-    row_height, font_size = page_metrics(project, collected["selected"])
+    row_height, font_size = page_metrics(project)
     lines = collected["lines"]
     selected = collected["selected"]
     # 代码不足配置页数时按实际页数输出（全部提交，不重复、不补空行）
@@ -107,10 +107,10 @@ def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_k
     section = doc.sections[0]
     section.page_width = Cm(21)
     section.page_height = Cm(29.7)
-    section.top_margin = Cm(0.65)
-    section.bottom_margin = Cm(0.65)
-    section.left_margin = Cm(1)
-    section.right_margin = Cm(1)
+    section.top_margin = Cm(MARGIN_MM["top"] / 10)
+    section.bottom_margin = Cm(MARGIN_MM["bottom"] / 10)
+    section.left_margin = Cm(MARGIN_MM["left"] / 10)
+    section.right_margin = Cm(MARGIN_MM["right"] / 10)
 
     for page in range(pages):
         chunk = selected[page * lines_per_page : (page + 1) * lines_per_page]

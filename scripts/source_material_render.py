@@ -57,29 +57,86 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
 
 
 MIN_LINES_PER_PAGE = 50
-# A4 竖向，页边距 上 12mm（页码）/ 下 6.5mm / 左右 10mm；DOCX 边距更小，同一行高两边都能排满
-PAGE_BODY_HEIGHT_PT = (297 - 12 - 6.5) / 25.4 * 72 - 4
-PAGE_BODY_WIDTH_PT = (210 - 20) / 25.4 * 72
-MONO_CHAR_WIDTH = 0.6  # 等宽字体字符宽度约为字号的 0.6 倍（中文按 2 个字符计）
+# 版式参照已成功登记的源程序材料：A4 竖向，五号字（10.5pt）、行距 14.5pt、每页 50 行排满；
+# 页边距 上 25mm（含页码）/ 下 16mm / 左 25mm / 右 23mm。
+MARGIN_MM = {"top": 25, "right": 23, "bottom": 16, "left": 25}
+BASE_FONT_PT = 10.5
+BASE_ROW_PT = 14.5
+PAGE_BODY_HEIGHT_PT = (297 - MARGIN_MM["top"] - MARGIN_MM["bottom"]) / 25.4 * 72
+PAGE_BODY_WIDTH_PT = (210 - MARGIN_MM["left"] - MARGIN_MM["right"]) / 25.4 * 72
+FONT_STACK = '"Helvetica Neue", Helvetica, Arial, "Songti SC", STSong, SimSun, serif'
+_FONT_FILES = ("/System/Library/Fonts/HelveticaNeue.ttc", "/System/Library/Fonts/Helvetica.ttc",
+               "C:/Windows/Fonts/arial.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf")
+_measure_cache = {}
 
 
 def page_lines(project):
-    """每页代码行数：至少 50 行。"""
-    return max(MIN_LINES_PER_PAGE, int(project.get("lines_per_page", 90)))
+    """每页代码行数：默认且至少 50 行。"""
+    return max(MIN_LINES_PER_PAGE, int(project.get("lines_per_page", MIN_LINES_PER_PAGE)))
 
 
-def page_metrics(project, selected_lines):
-    """行高按“可用高度 ÷ 每页行数”计算，保证每页从上排到下，不留半页空白；
-    字号随行高放大，但不超过页宽能容纳最长行的大小，也不超过 10pt。"""
+def page_metrics(project, selected_lines=None):
+    """行高 = 可用高度 ÷ 每页行数（50 行时约 14.5pt），每页从上排到下；字号五号 10.5pt，
+    每页行数更多时按比例缩小。长行不缩字号，改为折行（见 wrap_rows）。"""
     per_page = page_lines(project)
-    row_height = round(PAGE_BODY_HEIGHT_PT / per_page, 2)
-    widest = max((sum(2 if ord(ch) > 0x2E80 else 1 for ch in line) for line in selected_lines), default=1)
-    fit_width = PAGE_BODY_WIDTH_PT / (MONO_CHAR_WIDTH * max(widest, 60))
-    font_size = project.get("source_font_size")
-    if font_size is None:
-        font_size = min(row_height * 0.8, fit_width, 10.0)
-    font_size = round(max(5.5, min(float(font_size), row_height * 0.9)), 2)
-    return row_height, font_size
+    row_height = round(min(BASE_ROW_PT, PAGE_BODY_HEIGHT_PT / per_page), 2)
+    font_size = float(project.get("source_font_size") or round(BASE_FONT_PT * row_height / BASE_ROW_PT, 2))
+    return row_height, round(min(font_size, row_height * 0.8), 2)
+
+
+def _measurer(font_size):
+    """返回测量字符串宽度（pt）的函数：优先用与 PDF 相同的 Helvetica 字体实测，找不到时按均值估算。"""
+    if font_size in _measure_cache:
+        return _measure_cache[font_size]
+    font = None
+    try:
+        from PIL import ImageFont
+        for path in _FONT_FILES:
+            if Path(path).is_file():
+                font = ImageFont.truetype(path, size=100)
+                break
+    except (ImportError, OSError):
+        font = None
+
+    def width(text):
+        total = 0.0
+        latin = []
+        for ch in text:
+            if ord(ch) >= 0x2E80:  # 中日韩字符按全角
+                total += font_size
+            else:
+                latin.append(ch)
+        run = "".join(latin)
+        if run:
+            total += (font.getlength(run) / 100 * font_size) if font else len(run) * font_size * 0.56
+        return total
+    _measure_cache[font_size] = width
+    return width
+
+
+def wrap_rows(lines, font_size, width_pt=PAGE_BODY_WIDTH_PT):
+    """把超出页宽的代码行折成多行显示；折出的每一行都计入每页 50 行，代码一字不丢。"""
+    width = _measurer(font_size)
+    limit = width_pt * 0.97  # 预留余量，避免浏览器字形微差导致溢出
+    rows = []
+    for line in lines:
+        line = line.replace("\t", "    ")
+        while width(line) > limit:
+            lo, hi = 1, len(line)
+            while lo < hi:  # 二分找能放下的最长前缀
+                mid = (lo + hi + 1) // 2
+                if width(line[:mid]) <= limit:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            cut = lo
+            space = max(line.rfind(" ", 0, cut), line.rfind(",", 0, cut) + 1)
+            if space > cut * 0.6:  # 尽量在空格或逗号处断开，避免把单词拆开
+                cut = space
+            rows.append(line[:cut].rstrip())
+            line = line[cut:].lstrip()
+        rows.append(line)
+    return rows
 
 
 def select_source_lines(lines, project):
@@ -114,7 +171,9 @@ def collect_source_material(repo, project, tokens=(), cli_keep_comments=False,
         repo, project.get("source_files", []), project.get("redact", True), tokens,
         project.get("scrub_open_source", True), trim_comments, trim_imports, max_blank_lines,
     )
-    selected, pages, lines_per_page = select_source_lines(lines, project)
+    # 选材按“显示行”计：长行先折行，每页正好 50 行（含折行），首尾取材和页数都以此为准
+    rows = wrap_rows(lines, page_metrics(project)[1])
+    selected, pages, lines_per_page = select_source_lines(rows, project)
     return {
         "lines": lines,
         "selected": selected,
@@ -131,7 +190,7 @@ def collect_source_material(repo, project, tokens=(), cli_keep_comments=False,
 
 def build_source_html(project, selected_lines, pages, lines_per_page):
     """生成只包含代码页的可打印 HTML，不显示标题、页眉或页脚。"""
-    row_height, font_size = page_metrics(project, selected_lines)
+    row_height, font_size = page_metrics(project)
     body = []
     for page in range(pages):
         body.append('<section class="source-page">')
@@ -143,7 +202,7 @@ def build_source_html(project, selected_lines, pages, lines_per_page):
     return f'''<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>{escape(str(project.get("name", "源程序鉴别材料")))}</title>
 <style>
-@page {{ size: A4 portrait; margin: 12mm 10mm 6.5mm;
+@page {{ size: A4 portrait; margin: {MARGIN_MM["top"]}mm {MARGIN_MM["right"]}mm {MARGIN_MM["bottom"]}mm {MARGIN_MM["left"]}mm;
   @top-right {{ content: counter(page); font-size: 9pt; color: #555; }}
 }}
 * {{ box-sizing: border-box; }}
@@ -161,7 +220,7 @@ body {{ color: #111; overflow: hidden; }}
   height: {row_height}pt;
   line-height: {row_height}pt;
   font-size: {font_size}pt;
-  font-family: "SFMono-Regular", Menlo, "Noto Sans Mono CJK SC", "Noto Sans CJK SC", Consolas, monospace;
+  font-family: {FONT_STACK};
   white-space: pre;
   overflow: hidden;
   margin: 0;

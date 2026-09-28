@@ -50,6 +50,21 @@ class SourcePageFillTests(unittest.TestCase):
             self.assertAlmostEqual(row * n, PAGE_BODY_HEIGHT_PT, delta=1.0)  # 从上排到下，不留半页空白
             self.assertLessEqual(font, row)
 
+    def test_long_lines_wrap_without_losing_code(self):
+        from source_material_render import wrap_rows, page_metrics, _measurer, PAGE_BODY_WIDTH_PT
+        font = page_metrics({})[1]
+        long_line = "const result = " + " + ".join(f"value{i}" for i in range(60))
+        rows = wrap_rows(["short", long_line], font)
+        self.assertGreater(len(rows), 2)                                 # 长行折成多行
+        self.assertEqual("".join(rows[1:]).replace(" ", ""), long_line.replace(" ", ""))  # 一字不丢
+        width = _measurer(font)
+        self.assertTrue(all(width(r) <= PAGE_BODY_WIDTH_PT for r in rows))  # 每行都在页宽内
+
+    def test_reference_typography(self):
+        from source_material_render import page_metrics
+        row, font = page_metrics({})
+        self.assertEqual((row, font), (14.5, 10.5))                     # 五号字、行距 14.5pt、每页 50 行
+
     def test_blank_lines_removed_by_default(self):
         import inspect, source_material_render
         self.assertIn('get("max_blank_lines", 0)', inspect.getsource(source_material_render.collect_source_material))
