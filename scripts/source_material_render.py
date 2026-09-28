@@ -118,7 +118,9 @@ def build_source_html(project, selected_lines, pages, lines_per_page):
     return f'''<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>{escape(str(project.get("name", "源程序鉴别材料")))}</title>
 <style>
-@page {{ size: A4 portrait; margin: 6.5mm 10mm; }}
+@page {{ size: A4 portrait; margin: 12mm 10mm 6.5mm;
+  @top-right {{ content: counter(page); font-size: 9pt; color: #555; }}
+}}
 * {{ box-sizing: border-box; }}
 html, body {{ margin: 0; padding: 0; background: #fff; }}
 body {{ color: #111; overflow: hidden; }}

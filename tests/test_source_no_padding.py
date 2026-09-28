@@ -39,5 +39,12 @@ class SourceNoPaddingTests(unittest.TestCase):
             self.assertEqual(expected_source_pages(td, project), (24, True))
 
 
+class SourcePageNumberTests(unittest.TestCase):
+    def test_source_pdf_has_top_right_page_number(self):
+        from source_material_render import build_source_html
+        html = build_source_html({"name": "演示软件"}, ["a", "b"], 1, 50)
+        self.assertIn("@top-right {{ content: counter(page);".replace("{{", "{"), html)
+
+
 if __name__ == "__main__":
     unittest.main()

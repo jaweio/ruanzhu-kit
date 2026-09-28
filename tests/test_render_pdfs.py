@@ -7,6 +7,12 @@ import render_pdfs  # noqa: E402
 
 
 class ScreenshotLayoutTests(unittest.TestCase):
+    def test_every_style_prints_page_number_top_right(self):
+        for style in render_pdfs.STYLE_CHOICES:
+            html = render_pdfs.html_doc("订单管理系统", "<p>正文</p>", style=style, chapters=["软件概述"])
+            self.assertIn("@top-right { content: counter(page);", html, style)
+            self.assertNotIn("@bottom", html, style)
+
     def test_manual_uses_a4_paper_in_every_style(self):
         for style in render_pdfs.STYLE_CHOICES:
             html = render_pdfs.html_doc("订单管理系统", "<p>正文</p>", style=style, chapters=["软件概述"])

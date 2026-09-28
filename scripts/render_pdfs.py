@@ -113,10 +113,8 @@ def html_doc(title, body, version="", style="reference", chapters=None):
     if style == "reference":
         links = "\n".join(f'<li><a href="#chapter-{i+1}">{i+1:02d}-{c}</a></li>' for i, c in enumerate(chapters))
         page_css = """@page { size: A4; margin: 20mm 19mm 17mm;
-  @top-left { content: \"\"; }
-  @bottom-right { content: counter(page); font-size: 10pt; color: #555; }
-}
-@page :first { @top-left { content: \"\"; } @bottom-right { content: counter(page); } }"""
+  @top-right { content: counter(page); font-size: 10pt; color: #555; }
+}"""
         cover_css = """.cover { min-height:225mm; page-break-after:always; }
 .cover h1 { font-size:34px; margin:0 0 10mm; padding-bottom:4mm; border-bottom:1px solid #d1d5db; }
 .cover .doc-kind { font-size:22px; color:#555; margin:-5mm 0 10mm; }
@@ -136,10 +134,8 @@ th { background:#f7f7f7; }"""
     else:
         links = "\n".join(f'<li><a href="#chapter-{i+1}">{i+1}. {c}</a></li>' for i, c in enumerate(chapters))
         page_css = """@page { size: A4; margin: 22mm 19mm 18mm;
-  @top-left { content: \"\"; }
-  @bottom-center { content: counter(page); font-size: 9pt; color: #6b7280; }
-}
-@page :first { @top-left { content: \"\"; } @bottom-center { content: \"\"; } }"""
+  @top-right { content: counter(page); font-size: 10pt; color: #555; }
+}"""
         cover_css = """.cover { min-height:225mm; page-break-after:always; }
 .cover h1 { font-size:32px; margin:0 0 18mm; padding-bottom:4mm; border-bottom:2px solid #111827; }
 .cover .doc-kind { font-size:21px; color:#4b5563; margin:-10mm 0 16mm; }
