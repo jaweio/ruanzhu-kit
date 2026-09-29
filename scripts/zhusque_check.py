@@ -505,6 +505,9 @@ def main():
         check_parser.add_argument("--browser-timeout", type=int, default=120,
                                   help="网页单次最长等待秒数；验证码/登录/额度阻塞时保存进度")
         check_parser.add_argument("--plan", action="store_true", help="只生成待检清单和预算，不上传、不启动浏览器")
+        check_parser.add_argument("--no-manual-fallback", dest="manual_fallback", action="store_false",
+                                  help="网页自动填入失败时不复制到剪贴板、不打开朱雀网页")
+        check_parser.set_defaults(manual_fallback=True)
         check_parser.add_argument("--max-risk-ratio", type=float, default=DEFAULT_MAX_RISK_RATIO,
                                   help="AI+疑似占比闸门，默认 0.20；仅 finalize 生效")
         check_parser.set_defaults(finalize=finalize)

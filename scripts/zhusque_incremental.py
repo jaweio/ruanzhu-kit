@@ -338,6 +338,42 @@ def write_rewrite_tasks(path, rows):
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def copy_to_clipboard(text):
+    """复制到系统剪贴板；macOS 用 pbcopy，Windows 用 clip，Linux 用 xclip/xsel。失败返回 False。"""
+    import shutil
+    import subprocess
+    for cmd, encoding in ((["pbcopy"], "utf-8"), (["clip"], "utf-16le"),
+                          (["xclip", "-selection", "clipboard"], "utf-8"), (["xsel", "--clipboard", "--input"], "utf-8")):
+        if shutil.which(cmd[0]):
+            try:
+                subprocess.run(cmd, input=text.encode(encoding), check=True, timeout=10)
+                return True
+            except (OSError, subprocess.SubprocessError):
+                continue
+    return False
+
+
+def manual_fallback(text, open_page=True):
+    """网页自动填入失败时的兜底：把当前待检段落放进剪贴板，并在需要时打开朱雀网页。
+
+    只复制、打开页面，不代点检测、不处理验证码；用户粘贴并检测后，用 import-cua-result 或重跑续检。
+    """
+    import webbrowser
+    import zhusque_check as z
+    copied = copy_to_clipboard(text)
+    opened = False
+    if open_page:
+        try:
+            opened = bool(webbrowser.open(z.WEB_URL))
+        except webbrowser.Error:
+            opened = False
+    print(("已把待检测段落（%d 字）复制到剪贴板。" % len(text)) if copied else "无法写入剪贴板，请从 朱雀复核/待检文本 中复制。",
+          flush=True)
+    print(("已打开朱雀网页：" if opened else "朱雀网页：") + z.WEB_URL +
+          "。请粘贴后点“立即检测”；出现验证码请本人完成。检测完成后告诉 agent 继续。", flush=True)
+    return {"copied": copied, "opened": opened, "chars": len(text)}
+
+
 def run(args):
     import zhusque_check as z
     channel = getattr(args, "channel", "auto")
@@ -433,6 +469,8 @@ def run(args):
                     except (OSError, ValueError):
                         stats["handoff_error"] = "write_failed"
                         print("Computer Use 交接文件写入失败；成功检测结果仍保留在缓存中。", flush=True)
+                    if getattr(args, "manual_fallback", False) and failed_web["reason"] in ("unsupported", "unavailable"):
+                        stats["manual_fallback"] = manual_fallback(row["text"], open_page=profile_dir is None)
                 break
             actual_channel = result.get("channel", "api")
             origin = base_url if actual_channel == "api" else z.WEB_URL
