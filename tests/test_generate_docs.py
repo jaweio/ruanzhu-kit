@@ -28,7 +28,11 @@ class GenerateDocsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             generate_docs.write_project(root, {}, project)
-            self.assertTrue((root / "01-复杂系统" / "说明书章节" / "11-数据治理.md").exists())
+            # 空的默认章节被省略后，扩展章节按实际章序编号，文件名与正文标题一致
+            files = list((root / "01-复杂系统" / "说明书章节").glob("*-数据治理.md"))
+            self.assertEqual(len(files), 1)
+            number = int(files[0].name[:2])
+            self.assertTrue(files[0].read_text(encoding="utf-8").startswith(f"# {number} 数据治理"))
 
     def test_generation_does_not_require_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -36,7 +40,9 @@ class GenerateDocsTests(unittest.TestCase):
             project = {"id": "01-离线生成", "name": "离线生成"}
             generate_docs.write_project(root, {}, project)
             self.assertTrue((root / "01-离线生成" / "软件说明书.md").exists())
-            self.assertTrue((root / "01-离线生成" / "说明书章节" / "10-附录.md").exists())
+            chapters = sorted((root / "01-离线生成" / "说明书章节").glob("*.md"))
+            self.assertTrue(chapters)  # 没有内容的章节整章省略，不输出空壳
+            self.assertTrue(all(c.read_text(encoding="utf-8").strip().count("\n") >= 1 for c in chapters))
 
     def test_regeneration_removes_stale_generated_chapters(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -47,7 +53,7 @@ class GenerateDocsTests(unittest.TestCase):
             stale.write_text("# 11 旧的可选章节\n", encoding="utf-8")
             generate_docs.write_project(root, {}, {"id": "01-离线生成", "name": "离线生成"})
             self.assertFalse(stale.exists())
-            self.assertTrue((chapters / "10-附录.md").exists())
+            self.assertTrue((chapters / "01-软件概述.md").exists())
 
     def test_manual_spec_false_disables_monorepo_fallback(self):
         project = {"id": "p", "name": "P", "manual_spec": False}
@@ -187,6 +193,16 @@ if __name__ == "__main__":
 
 
 class DropEmptySectionsTests(unittest.TestCase):
+    def test_empty_chapter_removed_from_body_and_toc(self):
+        from generate_docs import drop_empty_sections
+        md = ("# 目录\n\n- [1. 概述](#概述)\n- [2. 运维管理](#运维管理)\n- [3. 附录](#附录)\n\n"
+              "# 概述\n\n## 1.1 简介\n正文。\n\n# 运维管理\n\n## 8.1 日志\n| a | b |\n| --- | --- |\n\n"
+              "# 附录\n\n## 10.1 截图\n图。\n")
+        out = drop_empty_sections(md)
+        self.assertNotIn("运维管理", out)
+        self.assertIn("- [2. 附录](#附录)", out)
+        self.assertIn("## 2.1 截图", out)
+
     def test_empty_sections_removed_and_renumbered(self):
         from generate_docs import drop_empty_sections
         md = ("# 配置说明\n\n## 5.1 配置概述\n\n\n## 5.2 配置项清单\n| 配置项 | 作用 |\n| --- | --- |\n\n"
@@ -194,8 +210,9 @@ class DropEmptySectionsTests(unittest.TestCase):
         out = drop_empty_sections(md)
         self.assertNotIn("配置概述", out)
         self.assertNotIn("配置项清单", out)
-        self.assertIn("## 5.1 存储", out)
-        self.assertIn("## 6.1 快速上手", out)
+        # 片段里“配置说明”是第 1 章：小节按删除后的实际章序重排
+        self.assertIn("## 1.1 存储", out)
+        self.assertIn("## 2.1 快速上手", out)
 
     def test_hardware_without_values_is_blank(self):
         from environment_profile import _hardware

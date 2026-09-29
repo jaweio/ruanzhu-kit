@@ -87,13 +87,21 @@ def table(rows, headers):
 
 
 def drop_empty_sections(text):
-    """删除没有正文的二级小节（只有标题，或表格只有表头），并按章重新编号。
+    """删除没有正文的小节和整章，并重排目录与编号。
 
+    - 二级小节只有标题、或表格只有表头：删除。
+    - 一级章节删完小节后没有任何正文：整章删除，目录中的条目一并删除。
+    - 目录序号、“## N.x” 小节编号按删除后的实际章序重新编排。
     配置缺字段时生成器会省略内容行，但标题和表头仍在；正式说明书不保留这种空壳。
     """
     lines = text.split("\n")
+
+    def is_blank_body(body):
+        body = [l for l in body if l.strip()]
+        return not body or (all(l.lstrip().startswith("|") for l in body) and len(body) <= 2)
+
     out, i = [], 0
-    while i < len(lines):
+    while i < len(lines):  # 先删空小节
         if not lines[i].startswith("## "):
             out.append(lines[i])
             i += 1
@@ -101,18 +109,41 @@ def drop_empty_sections(text):
         j = i + 1
         while j < len(lines) and not lines[j].startswith("#"):
             j += 1
-        body = [l for l in lines[i + 1:j] if l.strip()]
-        table_only = body and all(l.lstrip().startswith("|") for l in body) and len(body) <= 2
-        if body and not table_only:
+        if not is_blank_body(lines[i + 1:j]):
             out.extend(lines[i:j])
         i = j
-    counters = {}
-
-    def renumber(m):
-        chapter = m.group(1)
-        counters[chapter] = counters.get(chapter, 0) + 1
-        return f"## {chapter}.{counters[chapter]} "
-    return re.sub(r"^## (\d+)\.\d+ ", renumber, "\n".join(out), flags=re.M)
+    lines, out, i, removed = out, [], 0, set()
+    while i < len(lines):  # 再删空章
+        if not (lines[i].startswith("# ") and lines[i].strip() != "# 目录"):
+            out.append(lines[i])
+            i += 1
+            continue
+        j = i + 1
+        while j < len(lines) and not (lines[j].startswith("# ") and not lines[j].startswith("## ")):
+            j += 1
+        if is_blank_body(lines[i + 1:j]):
+            removed.add(lines[i][2:].strip())
+        else:
+            out.extend(lines[i:j])
+        i = j
+    result, chapter, section, toc_no = [], 0, 0, 0
+    for line in out:
+        toc = re.match(r"^- \[\d+\. (.+?)\]\(#(.+?)\)$", line)
+        if toc:
+            if toc.group(1) in removed:
+                continue
+            toc_no += 1
+            result.append(f"- [{toc_no}. {toc.group(1)}](#{toc.group(2)})")
+            continue
+        if line.startswith("# ") and line.strip() != "# 目录":
+            chapter, section = chapter + 1, 0
+            if re.match(r"^# \d+ ", line):
+                line = re.sub(r"^# \d+ ", f"# {chapter} ", line)
+        elif re.match(r"^## \d+\.\d+ ", line):
+            section += 1
+            line = re.sub(r"^## \d+\.\d+ ", f"## {chapter}.{section} ", line)
+        result.append(line)
+    return "\n".join(result)
 
 
 def undent(text):
@@ -223,13 +254,25 @@ def page_operation_steps(page):
     return steps[:5]
 
 
+def faq_paragraphs(project):
+    """常见问题写成“情况，处理方法。”的自然段，不用表格，也不用加粗问答连排。"""
+    rows = configured_rows(project, "faq", ["问题现象", "项目实际处理方法"], "实际问题和处理方式")
+    out = []
+    for question, answer in rows:
+        if str(question).strip() and str(answer).strip():
+            # 不用“**问题 n：**”加粗问答连排（写作规范：朱雀实测 0.78–0.999 判 AI），写成自然段
+            q = str(question).strip().rstrip("？?。")
+            out.append(f"{q}，{str(answer).strip().rstrip('。')}。")
+    return "\n\n".join(out)
+
+
 def module_labels(page, index):
     """根据页面证据选择小节标题，避免每页复制同一组模板标题。"""
     has_validation = bool(page.get("validations"))
     has_feedback = bool(page.get("feedbacks"))
-    first = ["入口与页面事实", "完成一次操作", "异常分支"]
-    second = ["先看哪里", "按顺序操作", "结果与处理"]
-    third = ["页面记录", "操作路径", "失败时检查"]
+    first = ["功能说明", "操作步骤", "异常处理"]
+    second = ["界面说明", "使用步骤", "结果与处理"]
+    third = ["功能与入口", "操作流程", "提示与处理"]
     labels = (first, second, third)[(index - 2) % 3]
     if not has_validation:
         labels[1] = "按顺序查看" if index % 2 == 0 else "操作路径"
@@ -272,28 +315,38 @@ def module_sections(project, spec=None, shots=None, used=None):
         scope = str(page.get("scope_note", "")).strip()
         steps = page.get("steps") or page_operation_steps(page)
         step_md = "\n".join(f"{n}. {st}" for n, st in enumerate(steps, 1))
-        rows = [["页面", name]]
+        # 界面事实写成段落而不是“项目/内容”表：表格在朱雀实测中多判为疑似，
+        # 而带真实控件文字的叙述更接近人工写法。
+        facts = []
         if elements:
-            rows.append(["界面元素", elements])
+            facts.append(f"{name}界面上可以看到{elements}等文字和按钮。")
         if page.get("validations"):
-            rows.append(["取值约束", "；".join(page["validations"][:4])])
-        if page.get("feedbacks"):
-            rows.append(["操作反馈", "；".join(page["feedbacks"][:4])])
+            facts.append("输入时会校验：" + "，".join(f"“{v}”" for v in page["validations"][:4]) + "。")
+        shown = [f for f in page.get("feedbacks", [])[:4] if f not in page.get("validations", [])]
+        if shown:
+            facts.append("操作后页面会给出" + "、".join(f"“{f}”" for f in shown) + "等提示。")
+        fact_md = "".join(facts)
         # Do not manufacture a repeated error-code sentence for every page.
         # Source extraction often has no explicit error strings; that is not a
         # runtime failure and the placeholder made its way into formal manuals
         # as noisy, misleading copy.  Render an exception subsection only when
         # the project actually supplied errors or feedbacks.
-        err = table([[c, m, "按该提示检查输入、网络或当前页面状态。"] for c, m in page["errors"][:6]],
-                    ["错误码/提示", "实际提示", "处理建议"]) if page.get("errors") else \
-            (f"先核对页面反馈“{page['feedbacks'][0]}”，再按实际界面处理。" if page.get("feedbacks") else "")
+        # 异常小节只写真实内容：素材里的提示说明（scope_note）或源码抽到的错误码；
+        # 两者都没有时整节省略，不补“再按实际界面处理”之类的空话。
+        if scope:
+            err = scope
+        elif page.get("errors"):
+            err = table([[c, m, "按该提示检查输入、网络或当前页面状态。"] for c, m in page["errors"][:6]],
+                        ["错误码/提示", "实际提示", "处理建议"])
+        else:
+            err = ""
         labels = module_labels(page, i)
-        scope_line = f"\n\n范围说明：{scope}" if scope else ""
+        scope_line = ""
         exception_block = f"### {labels[2]}\n\n{err}\n" if err else ""
         out.append(
             f"## 7.{i} {name}\n\n"
             f"### {labels[0]}\n\n{purpose}{scope_line}\n\n"
-            f"{table(rows, ['项目', '内容'])}\n\n"
+            + (f"{fact_md}\n\n" if fact_md else "") +
             f"### {labels[1]}\n\n{step_md}\n\n"
             f"{exception_block}"
             + shot_md(name, shots, used))
@@ -596,11 +649,15 @@ def hardware_rows(project):
     if isinstance(rows, list) and rows:
         return rows
     env = project.get("env") or {}
-    minimum = str(env.get("run_hardware", "")).strip()
-    recommended = str(env.get("dev_hardware", "")).strip()
-    if minimum or recommended:
-        return [["运行设备", minimum or recommended, recommended or minimum]]
-    return []
+    rows = []
+    dev = str(env.get("dev_hardware", "")).strip()
+    run = str(env.get("run_hardware", "")).strip()
+    # 开发机和运行设备是两回事：开发机配置不能写成用户设备的“推荐配置”
+    if dev:
+        rows.append(["开发设备", dev])
+    if run:
+        rows.append(["运行设备", run])
+    return rows
 
 
 def hardware_section(project, spec=None):
@@ -615,7 +672,9 @@ def hardware_section(project, spec=None):
         if run:
             rows.append(["运行设备", run, "部署服务进程；数据库和 Redis 容量按实际负载规划。"])
         return table(rows, ["环境", "建议配置", "用途"])
-    return table(hardware_rows({**project, "env": env}), ["硬件项", "最低配置", "推荐配置"])
+    rows = hardware_rows({**project, "env": env})
+    headers = ["硬件项", "最低配置", "推荐配置"] if rows and len(rows[0]) == 3 else ["环境", "配置"]
+    return table(rows, headers)
 
 
 def environment_rows(project, spec=None):
@@ -728,13 +787,17 @@ def manual(project, cfg, spec=None, shots=None):
     hardware_table = hardware_section(env_project, spec)
     software_environment_table = table(environment_rows(env_project, spec), ["软件项", "说明"])
     user_ops = project.get("user_operations") or {}
-    user_table = table([[u, user_ops.get(u, "") ] for u in users(project)], ["角色", "实际操作范围"])
+    role_rows = [[u, user_ops.get(u, "")] for u in users(project)]
+    if any(op for _, op in role_rows):
+        user_table = table(role_rows, ["角色", "实际操作范围"])
+    else:
+        user_table = ("本软件的主要用户为" + "、".join(u for u, _ in role_rows) + "。") if role_rows else ""
     name = project["name"]
     short = project.get("short_name", name)
     version = project.get("version", "V1.0")
     summary = configured_text(project, "summary", "")
     position = configured_text(project, "position", "")
-    identity = f"是一款{position}。" if position else "。"
+    identity = f"是一款{position.rstrip('。.')}。" if position else "。"
     intro = f"{name}（以下简称“{short}”）{identity}"
     intro += summary
     api_section_text = rest_api_section(project, spec)
@@ -778,7 +841,7 @@ def manual(project, cfg, spec=None, shots=None):
     {table(configured_rows(project, "architecture_layers", ["层级", "源码证据和职责"], "实际架构层级"), ["层级", "源码证据和职责"])}
 
     ## 2.3 关键模块架构
-    {module_table}
+    {configured_text(project, "module_architecture", "")}
 
     ## 2.4 数据流转流程
     {configured_text(project, "data_flow", "一次真实请求从入口到响应的流转步骤")}
@@ -845,7 +908,7 @@ def manual(project, cfg, spec=None, shots=None):
     # 常见问题
 
     ## 9.1 常见问题
-    {table(configured_rows(project, "faq", ["问题现象", "项目实际处理方法"], "实际问题和处理方式"), ["问题现象", "项目实际处理方法"])}
+    {faq_paragraphs(project)}
 
     # 附录
 
@@ -915,8 +978,11 @@ def rest_api_section(project, spec=None):
 
 
 def shot_table(project, shots, spec=None):
-    rows = [[it["no"], it["title"], f"`{it['file']}`"] for items in (shots or {}).values() for it in items]
-    return table(sorted(rows), ["编号", "截图", "文件"])
+    items = [it for group in (shots or {}).values() for it in group]
+    def order(it):
+        nums = re.findall(r"\d+", str(it.get("no", "")))
+        return tuple(int(n) for n in nums)
+    return table([[it["no"], it["title"]] for it in sorted(items, key=order)], ["编号", "截图"])
 
 
 def evidence_plan_markdown(project, spec=None):
@@ -955,27 +1021,18 @@ def write_project(root, cfg, project, spec=None):
         evidence_path.write_text(evidence, encoding="utf-8")
     elif evidence_path.exists():
         evidence_path.unlink()
-    chapters_list = chapter_names(project)
-    chapter_markers = [
-        f"# {chapter}" if idx <= len(DEFAULT_CHAPTERS) else f"# {idx} {chapter}"
-        for idx, chapter in enumerate(chapters_list, 1)
-    ]
+    # 按最终正文里实际存在的一级章节拆分（空章已删除并重新编号），
+    # 避免按固定章节表查找时因某章缺失而把后续全文并入上一章。
+    heads = [m for m in re.finditer(r"(?m)^# (?!目录\s*$)(?:\d+ )?(.+?)\s*$", text)]
+    expected_chapters = {f"{k:02d}-{m.group(1)}.md" for k, m in enumerate(heads, 1)}
     # A project can be regenerated with a shorter chapter list than a prior
-    # run (for example after removing an optional chapter).  Do not leave the
-    # old generated markdown beside the new package: it is easy to mistake a
-    # stale file for an active chapter and accidentally upload it.
-    expected_chapters = {
-        f"{idx:02d}-{chapter}.md" for idx, chapter in enumerate(chapters_list, 1)
-    }
+    # run.  Do not leave stale generated markdown beside the new package.
     for stale in chapters.glob("[0-9][0-9]-*.md"):
         if stale.name not in expected_chapters:
             stale.unlink()
-    for idx, chapter in enumerate(chapters_list, 1):
-        marker = chapter_markers[idx - 1]
-        start = text.find(marker)
-        end = text.find(f"\n{chapter_markers[idx]}", start + 1) if idx < len(chapters_list) else len(text)
-        if start >= 0:
-            (chapters / f"{idx:02d}-{chapter}.md").write_text(text[start:end].strip() + "\n", encoding="utf-8")
+    for k, m in enumerate(heads, 1):
+        end = heads[k].start() if k < len(heads) else len(text)
+        (chapters / f"{k:02d}-{m.group(1)}.md").write_text(text[m.start():end].strip() + "\n", encoding="utf-8")
 
 
 def reference_material_report(cfg, root):
@@ -1068,7 +1125,8 @@ def application_copy(project, cfg, spec=None):
            "| 项目 | 建议填写 |", "| --- | --- |"]
     out += [f"| {k} | {v} |" for k, v in rows if str(v).strip()]
     sections = [
-        ("软件主要功能", configured_text(project, "summary", "")),
+        # 与 application_form.py 同源：优先正式的 main_function（500–1300 字），没有时才用概述
+        ("软件主要功能", configured_text(project, "main_function", "") or configured_text(project, "summary", "")),
         ("源程序量", spec_lines(spec)),
         ("开发工具", str(env.get("dev_tools", "")).strip()),
         ("技术特点", configured_text(project, "tech_feature_text", "")),

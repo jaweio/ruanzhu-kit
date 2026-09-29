@@ -37,6 +37,14 @@ def match_module(name, modules):
     return ""
 
 
+def shot_title(stem, mod):
+    """图题：模块名 + 文件名里“-”后面的子标题，如“经典房记账（记录支出）”，同一模块多张图不再同名。"""
+    plain = re.sub(r"^[\d\-_.\s]+", "", stem)
+    sub = plain.split("-", 1)[1].strip() if "-" in plain else ""
+    base = mod or plain
+    return f"{base}（{sub}）" if sub and sub != base else base
+
+
 def load_modules(spec_path):
     data = load_spec(spec_path)
     return [str(page.get("module", "")).strip() for page in data.get("pages", [])
@@ -166,7 +174,7 @@ def main():
         out_name = f"{args.prefix}-{i}{('_' + mod) if mod else ''}{p.suffix.lower()}"
         shutil.copy2(p, dst / out_name)
         item = {"no": f"图 {args.prefix}-{i}", "file": f"截图/{out_name}",
-                "module": mod, "title": mod or Path(p.stem).name, "source": str(p.name)}
+                "module": mod, "title": shot_title(p.stem, mod), "source": str(p.name)}
         if evidence_id:
             item["evidence_id"] = evidence_id
         items.append(item)
