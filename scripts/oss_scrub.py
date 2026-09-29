@@ -25,8 +25,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from copyright_check import (COPYRIGHT_LINE, LICENSE_TEXT, REPO_URL, SCAFFOLDS, THIRD_PARTY_PATH,  # noqa: E402
-                             holder_tokens)
+from copyright_check import (COPYRIGHT_LINE, GENERATED_MARK, GENERATED_PATH, LICENSE_TEXT, REPO_URL,  # noqa: E402
+                           SCAFFOLDS, THIRD_PARTY_PATH, TYPE_DECL, holder_tokens)
 
 # 清除范围只有三类：① 开源协议 ② 仓库/托管地址 ③ 引用来源。
 # Star 评分、Issue 工单、fork()、PR、贡献者、社区、GitHub 登录等业务用语一律不动。
@@ -110,14 +110,26 @@ def is_own(who, tokens):
     return any(t.lower() in w for t in tokens)
 
 
+from source_material import COMMENT_LEAD  # noqa: E402
+
+NON_CODE_PATH = re.compile(r"\.(?:md|markdown|log|csv|tsv|map|svg|lock|sum|png|jpe?g|gif|ico|woff2?|ttf|eot|mp[34]|pdf|zip)$", re.I)
+
+
 def third_party_reasons(rel, text, tokens):
     """返回该文件不能取材的原因列表；空列表表示可以取材（自有或无声明）。"""
     reasons = []
     if THIRD_PARTY_PATH.search(rel):
         reasons.append("第三方/构建产物路径")
+    if GENERATED_PATH.search(rel) or TYPE_DECL.search(rel):
+        reasons.append("工具生成或类型声明文件")
+    if NON_CODE_PATH.search(rel):
+        reasons.append("非源代码文件（文档/数据/锁文件/资源）")
     lines = text.splitlines()
     if lines and (max(len(l) for l in lines) > 1000 or sum(len(l) for l in lines) / len(lines) > 250):
         reasons.append("压缩/打包代码")
+    # 只认文件开头注释里的生成标记，避免把“自动生成订单号”这类业务代码误判
+    if any(COMMENT_LEAD.match(line) and GENERATED_MARK.search(line) for line in lines[:30]):
+        reasons.append("自动生成代码（文件头含生成标记）")
     head = "\n".join(lines[:60])
     foreign = [w for w in _copyright_owners(head) if not is_own(w, tokens)]
     if foreign:

@@ -8,6 +8,7 @@ PDF 路径不依赖 python-docx 或办公软件，交给 Chromium 负责分页�
 from __future__ import annotations
 
 import math
+import re
 
 from html import escape
 from pathlib import Path
@@ -19,6 +20,10 @@ from source_material import compact_blank_lines, strip_comments, strip_imports, 
 from source_validation import SourceValidationError
 
 
+# 零宽字符、词连接符和文件中间的 BOM：看不见，但会让材料与源码逐字比对不一致
+INVISIBLE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
+
+
 def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=True,
                trim_imports=True, max_blank_lines=1):
     """读取取材文件：只裁剪输出材料，不改写源文件。
@@ -27,7 +32,8 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
     """
     lines, missing, skipped = [], [], []
     stats = {"headers": 0, "dropped": 0, "comments": 0, "imports": 0, "blank_lines": 0,
-             "signatures": 0, "encoding_skipped": 0}
+             "signatures": 0, "encoding_skipped": 0, "duplicates": 0}
+    seen = {}
     for rel in files:
         p = repo / rel
         if not p.is_file():
@@ -40,6 +46,14 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
             skipped.append((rel, f"编码有问题（{exc}），已排除"))
             stats["encoding_skipped"] += 1
             continue
+        text = INVISIBLE.sub("", text).replace("\u00a0", " ")
+        fingerprint = "".join(text.split())
+        if len(fingerprint) > 200 and fingerprint in seen:
+            # 内容完全相同的副本会让同一段代码出现两次，等同凑页
+            skipped.append((rel, f"与 {seen[fingerprint]} 内容完全相同（重复文件），已排除"))
+            stats["duplicates"] += 1
+            continue
+        seen.setdefault(fingerprint, rel)
         reasons = third_party_reasons(rel, text, tokens)
         foreign = [who for who in _copyright_owners(text) if not is_own(who, tokens)]
         if not reasons and foreign:
@@ -67,7 +81,7 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
         file_lines = compact_blank_lines(file_lines, max_blank_lines)
         stats["blank_lines"] += max(0, before_compact - len(file_lines))
         for line in file_lines:
-            line = line.replace("\t", "  ")
+            line = line.replace("\t", "  ").rstrip()
             lines.append(redact_line(line) if redact else line)
     return lines, missing, skipped, stats
 
