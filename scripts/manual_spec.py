@@ -18,6 +18,10 @@ import re
 from collections import Counter
 from datetime import date
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from source_encoding import read_source_text  # noqa: E402
 
 UI_EXT = {".vue", ".tsx", ".jsx", ".ts", ".js", ".wxml", ".axml", ".ttml", ".html", ".htm",
           ".dart", ".swift", ".kt", ".java", ".cs", ".xml", ".py", ".php", ".uvue"}
@@ -116,10 +120,10 @@ def scan_files(repo, includes):
 def stats(repo, files):
     total, by_ext = 0, Counter()
     for p in files:
-        try:
-            n = sum(1 for _ in p.open("r", encoding="utf-8", errors="ignore"))
-        except OSError:
+        text = read_source_text(p, None)
+        if text is None:  # 二进制或编码无法识别，不计入源程序量
             continue
+        n = len(text.splitlines())
         total += n
         by_ext[p.suffix.lower()] += n
     return {"source_files": len(files), "source_lines": total,
@@ -133,7 +137,7 @@ def route_map(repo, files):
     for p in files:
         if not re.search(r"rout|app\.json|pages\.json|menu|nav", p.name, re.I):
             continue
-        text = p.read_text(encoding="utf-8", errors="ignore")
+        text = read_source_text(p)
         for m in re.finditer(ROUTE_PATTERNS[0], text, re.S):
             routes.setdefault(m.group(2), m.group(1))
         for m in re.finditer(ROUTE_PATTERNS[1], text):
@@ -147,9 +151,8 @@ def extract_apis(repo, files):
     for path in files:
         if path.suffix.lower() not in CODE_EXT:
             continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+        text = read_source_text(path, None)
+        if text is None:
             continue
         base_path = ""
         # 类级别的 Spring @RequestMapping 作为路径前缀，仅在同一文件内拼接。
@@ -190,7 +193,7 @@ def api_docs_enabled(files):
     source_markers = ("@openapidefinition", "@operation", "@swagger", "swaggerui", "swagger-ui")
     for path in files:
         try:
-            text = path.read_text(encoding="utf-8", errors="ignore").lower()
+            text = read_source_text(path).lower()
         except OSError:
             continue
         config_file = path.name.lower().startswith("application") and path.suffix.lower() in {".yml", ".yaml", ".properties", ".json"}
@@ -253,7 +256,7 @@ def page_entry(path, routes):
 
 
 def extract_page(repo, path, routes):
-    text = path.read_text(encoding="utf-8", errors="ignore")
+    text = read_source_text(path)
     elements = uniq(find_all(text, ELEMENT_PATTERNS), 12)
     feedbacks = uniq(find_all(text, FEEDBACK_PATTERNS), 8)
     validations = uniq(find_all(text, VALIDATION_PATTERNS[:1]), 8, clean=False)

@@ -18,6 +18,7 @@ from oss_scrub import own_tokens, scrub_code, third_party_reasons  # noqa: E402
 from source_material import compact_blank_lines, strip_comments, strip_imports  # noqa: E402
 
 
+from source_encoding import SourceEncodingError, read_source  # noqa: E402
 from source_material_render import page_lines  # noqa: E402
 
 
@@ -67,7 +68,13 @@ def collect_project(repo, project, tokens=(), trim_comments=True, trim_imports=T
             rows.append({"path": rel, "status": "missing", "raw_lines": 0, "material_lines": 0,
                          "comments": 0, "imports": 0, "blank_lines": 0, "sample": []})
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            text = read_source(path)[0]
+        except SourceEncodingError as exc:
+            rows.append({"path": rel, "status": "skipped", "reason": f"编码有问题（{exc}），已排除",
+                         "raw_lines": 0, "material_lines": 0,
+                         "comments": 0, "imports": 0, "blank_lines": 0, "sample": []})
+            continue
         reasons = third_party_reasons(rel, text, tokens)
         if reasons:
             rows.append({"path": rel, "status": "skipped", "reason": "；".join(reasons),

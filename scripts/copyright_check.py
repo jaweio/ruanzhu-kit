@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from output_names import (manual_pdf_name, source_material_docx_name,
                           source_material_pdf_name, submission_dir)  # noqa: E402
 from artifact_manifest import formal_material_paths  # noqa: E402
+from source_encoding import SourceEncodingError, read_source, read_source_text  # noqa: E402
 
 MISSING_FACT = re.compile(r"^\s*(?:待确认|待填写|待补充|待核验)(?:\s*[（(].*)?\s*$")
 
@@ -233,7 +234,7 @@ def check_project(repo, cfg, F):
         p = repo / name
         if not p.exists():
             continue
-        text = p.read_text(encoding="utf-8", errors="ignore")[:6000]
+        text = read_source_text(p)[:6000]
         kind = next((k for k, pat, _ in LICENSE_TEXT if re.search(pat, text, re.I)), "未识别")
         owners = [re.sub(r"^[-–\s]*(?:present|now)?[,\s]*", "", m.group(1)).strip() for m in COPYRIGHT_LINE.finditer(text)]
         own_license = self_oss and all(_is_own(w, tokens) for w in owners if w)
@@ -337,7 +338,12 @@ def check_sources(repo, cfg, F):
         if not p.exists():
             F.add("medium", "取材", where, "文件不存在", str(p), "检查 --repo 路径或更新 source_files")
             continue
-        text = p.read_text(encoding="utf-8", errors="ignore")
+        try:
+            text = read_source(p)[0]
+        except SourceEncodingError as exc:
+            F.add("medium", "取材", where, "源码编码有问题", str(exc),
+                  "提取时自动排除；请把文件转为 UTF-8 后重新提取，或从 source_files 移除")
+            continue
         lines = text.splitlines()
         if lines and (max(len(l) for l in lines) > 1000 or sum(len(l) for l in lines) / len(lines) > 250):
             F.add("high", "取材", where, "压缩/打包代码", f"平均行长 {sum(len(l) for l in lines) // len(lines)}",
@@ -421,7 +427,7 @@ def check_sources(repo, cfg, F):
     auto_skip = set()
     for rel in owner:
         p = repo / rel
-        if p.exists() and third_party_reasons(rel, p.read_text(encoding="utf-8", errors="ignore"), holder_tok):
+        if p.exists() and third_party_reasons(rel, read_source_text(p), holder_tok):
             auto_skip.add(rel)
     for item in F.items:
         f = item["where"].split(":")[0]

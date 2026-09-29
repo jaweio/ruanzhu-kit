@@ -135,3 +135,30 @@ def compact_blank_lines(lines, max_blank_lines=1):
     while out and not out[-1].strip():
         out.pop()
     return out
+
+
+# 署名：个人作者、创建人、联系方式等。只处理注释/文档字符串形态的行，不动业务代码。
+COMMENT_LEAD = re.compile(r"^\s*(?://+|#+|/\*+|\*+|<!--|--|;+|'''|\"\"\"|%|REM\b|@)", re.I)
+SIGNATURE = re.compile(
+    r"@(?:author|authors|since|date|email|mail|createdate|create_date|createtime|create_time|version)\b"
+    r"|\b(?:author|authors|created\s+by|creator|maintainer|written\s+by)\s*[:：@]?\s*\S"
+    r"|(?:作者|创建人|创建者|编写人|编写者|开发者|开发人员|维护人|修改人)\s*[:：]",
+    re.I)
+COPYRIGHT_MARK = re.compile(r"copyright|\(c\)\s*\d{4}|©|版权所有|all\s+rights\s+reserved", re.I)
+
+
+def strip_signatures(lines):
+    """删除输出副本中的个人署名行和版权行，返回 ``(lines, removed)``。
+
+    - ``@author``、``Author:``、``Created by``、``作者：`` 等署名行：删除（源码中不能出现个人签名）。
+    - 注释中的 Copyright / 版权所有 行：删除（材料里不保留完成时间前的版权声明）。
+    调用方必须先排除含他人版权声明的文件（整份按第三方代码跳过），因此这里只会删除自有声明，
+    绝不删除他人声明后冒充自研。
+    """
+    kept, removed = [], 0
+    for line in lines:
+        if COMMENT_LEAD.match(line) and (SIGNATURE.search(line) or COPYRIGHT_MARK.search(line)):
+            removed += 1
+            continue
+        kept.append(line)
+    return kept, removed

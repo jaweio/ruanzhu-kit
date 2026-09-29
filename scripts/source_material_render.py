@@ -13,8 +13,9 @@ from html import escape
 from pathlib import Path
 
 from copyright_check import redact_line
-from oss_scrub import own_tokens, scrub_code, third_party_reasons
-from source_material import compact_blank_lines, strip_comments, strip_imports
+from oss_scrub import _copyright_owners, is_own, own_tokens, scrub_code, third_party_reasons
+from source_encoding import SourceEncodingError, read_source
+from source_material import compact_blank_lines, strip_comments, strip_imports, strip_signatures
 from source_validation import SourceValidationError
 
 
@@ -25,14 +26,25 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
     返回 ``(lines, missing, skipped, stats)``，与历史 generate_source_docx API 兼容。
     """
     lines, missing, skipped = [], [], []
-    stats = {"headers": 0, "dropped": 0, "comments": 0, "imports": 0, "blank_lines": 0}
+    stats = {"headers": 0, "dropped": 0, "comments": 0, "imports": 0, "blank_lines": 0,
+             "signatures": 0, "encoding_skipped": 0}
     for rel in files:
         p = repo / rel
         if not p.is_file():
             missing.append(rel)
             continue
-        text = p.read_text(encoding="utf-8", errors="ignore")
+        try:
+            text, _encoding = read_source(p)
+        except SourceEncodingError as exc:
+            # 乱码会让材料和真实代码不一致：整份排除并在报告中列出
+            skipped.append((rel, f"编码有问题（{exc}），已排除"))
+            stats["encoding_skipped"] += 1
+            continue
         reasons = third_party_reasons(rel, text, tokens)
+        foreign = [who for who in _copyright_owners(text) if not is_own(who, tokens)]
+        if not reasons and foreign:
+            # 文件开头之外出现的他人版权声明同样说明是第三方代码
+            reasons = ["他人版权声明：" + foreign[0][:40]]
         if reasons:
             skipped.append((rel, "；".join(reasons)))
             continue
@@ -42,6 +54,9 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
             stats["dropped"] += scrub_stats["dropped"]
         else:
             file_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        # 署名清理不依赖 trim_comments：保留注释时也不能留下个人签名和版权声明
+        file_lines, removed = strip_signatures(file_lines)
+        stats["signatures"] += removed
         if trim_comments:
             file_lines, removed = strip_comments(file_lines, rel)
             stats["comments"] += removed

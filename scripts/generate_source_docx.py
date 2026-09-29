@@ -169,7 +169,9 @@ def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_k
         f"- 材料压缩：普通注释 {'已移除' if trim_comments else '保留'} {scrub_stats['comments']} 行；"
         f"导入/include/use 声明 {'已移除' if trim_imports else '保留'} {scrub_stats['imports']} 行；"
         f"连续空行已压缩（最多 {max_blank_lines} 行）\n"
-        f"- 自动跳过的第三方文件：{len(skipped)} 个\n"
+        f"- 署名清理：删除个人署名（@author、Created by、作者：等）和版权声明行 {scrub_stats.get('signatures', 0)} 行（仅输出材料，源文件不变）\n"
+        f"- 编码：自动识别 UTF-8 / UTF-16 / GBK，编码有问题而排除的文件 {scrub_stats.get('encoding_skipped', 0)} 个（见下方清单）\n"
+        f"- 自动跳过的文件（第三方或编码有问题）：{len(skipped)} 个\n"
         + "".join(f"  - `{r}`：{why}\n" for r, why in skipped)
         + f"- 可用代码行数：{len(lines)}（配置 {configured_pages} 页需要 {need} 行；不足时全部提交，不重复、不补空行）\n",
         encoding="utf-8",
