@@ -13,7 +13,7 @@ from docx.shared import Cm, Pt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from oss_scrub import own_tokens  # noqa: E402
-from source_material_render import MARGIN_MM, page_metrics, build_source_html, collect_source_material, read_lines  # noqa: E402
+from source_material_render import MARGIN_MM, page_metrics, source_header_text, build_source_html, collect_source_material, read_lines  # noqa: E402
 from output_names import source_material_docx_name, source_material_html_name  # noqa: E402
 
 
@@ -79,6 +79,28 @@ def add_page(doc, page_lines, lines_per_page, font_size_pt, row_height_pt):
         run.font.size = Pt(font_size_pt)
 
 
+def add_header(section, text):
+    """页眉：左侧软件全称 + 版本号，右侧 PAGE 域页码，与 PDF 一致。"""
+    from docx.enum.text import WD_TAB_ALIGNMENT
+    section.header_distance = Cm(1.2)
+    para = section.header.paragraphs[0]
+    para.paragraph_format.tab_stops.add_tab_stop(Cm((210 - MARGIN_MM["left"] - MARGIN_MM["right"]) / 10),
+                                                 WD_TAB_ALIGNMENT.RIGHT)
+    run = para.add_run(f"{text}\t")
+    run.font.size = Pt(9)
+    page_run = para.add_run()
+    page_run.font.size = Pt(9)
+    for tag, value in (("begin", None), (None, "PAGE"), ("end", None)):
+        if tag:
+            el = OxmlElement("w:fldChar")
+            el.set(qn("w:fldCharType"), tag)
+        else:
+            el = OxmlElement("w:instrText")
+            el.set(qn("xml:space"), "preserve")
+            el.text = value
+        page_run._r.append(el)
+
+
 def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_keep_imports=False):
     pages = int(project.get("source_pages", 60))
     collected = collect_source_material(repo, project, tokens, cli_keep_comments, cli_keep_imports)
@@ -111,6 +133,7 @@ def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_k
     section.bottom_margin = Cm(MARGIN_MM["bottom"] / 10)
     section.left_margin = Cm(MARGIN_MM["left"] / 10)
     section.right_margin = Cm(MARGIN_MM["right"] / 10)
+    add_header(section, source_header_text(project))
 
     for page in range(pages):
         chunk = selected[page * lines_per_page : (page + 1) * lines_per_page]
@@ -130,7 +153,7 @@ def build_doc(repo, out_root, project, tokens=(), cli_keep_comments=False, cli_k
     )
     (out_dir / "源程序取材记录.json").write_text(json.dumps({
         "pages": pages, "configured_pages": configured_pages, "lines_per_page": lines_per_page,
-        "code_lines": len(lines), "complete": len(lines) <= configured_pages * lines_per_page,
+        "code_lines": len(lines), "complete": collected["complete"],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "源程序DOCX生成报告.md").write_text(
         f"# {project['name']} 源程序 DOCX 生成报告\n\n"

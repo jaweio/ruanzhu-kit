@@ -28,13 +28,16 @@ class WorkflowSmokeTests(unittest.TestCase):
             from pypdf import PdfWriter
             from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
             for path in (final_dir / "演示-后端源码.pdf", final_dir / "演示-后端软件说明.pdf"):
-                writer = PdfWriter(); page = writer.add_blank_page(width=100, height=100)
+                writer = PdfWriter(); page = writer.add_blank_page(width=595, height=842)
                 font = DictionaryObject({NameObject("/Type"): NameObject("/Font"),
                                          NameObject("/Subtype"): NameObject("/Type1"),
                                          NameObject("/BaseFont"): NameObject("/Helvetica")})
                 page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
                 stream = DecodedStreamObject()
-                stream.set_data(b"BT /F1 12 Tf 10 10 Td (Demo software V1.0) Tj ET")
+                content = b"Demo software V1.0"
+                if path.name.endswith("源码.pdf"):
+                    content = b"const total = items.reduce\\(\\(sum, item\\) => sum + item.price, 0\\);"
+                stream.set_data(b"BT /F1 10 Tf 50 760 Td (" + content + b") Tj ET")
                 page[NameObject("/Contents")] = stream
                 with path.open("wb") as handle:
                     writer.write(handle)

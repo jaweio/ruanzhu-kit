@@ -23,6 +23,7 @@ from ai_compliance import FOLDER as AI_FOLDER, RECORD as AI_RECORD, filename as 
 from output_names import (endpoint_label, manual_pdf_name,
                           source_material_pdf_name, submission_dir,
                           submission_form_path)
+from source_validation import SourceValidationError, validate_source_pdf
 
 
 def load_material_manifest(path):
@@ -227,7 +228,9 @@ def build_manifest(config_path, cfg, project, root):
                                     _expected_source_pages(project_dir, project)),
         "docPdf": _file_record(manual_pdf, root, "文档鉴别材料", 1),
     }
-    checks = verify_records(files, features, manual_pdf)
+    # 源程序页眉（软件全称 + 版本号）供正文校验识别页边距行
+    files["programPdf"]["header"] = f"{project.get('name', '')} {project.get('version', 'V1.0')}".strip()
+    checks = verify_records(files, features, manual_pdf, source_pdf)
     zhusque = _zhusque_status(project_dir)
     if not zhusque["checked"] and not zhusque["waived"]:
         checks.append("尚未完成当前正文的朱雀正式检测（必需）；运行 zhusque_check.py finalize。"
@@ -280,7 +283,7 @@ def build_manifest(config_path, cfg, project, root):
     }
 
 
-def verify_records(files, form_features, manual_pdf=None):
+def verify_records(files, form_features, manual_pdf=None, source_pdf=None):
     errors = []
     for key, record in files.items():
         if not record["exists"]:
@@ -301,6 +304,16 @@ def verify_records(files, form_features, manual_pdf=None):
             errors.append(f"docPdf 无法抽取文本，不能确认不含草稿占位符：{exc}")
         if hits:
             errors.append(f"docPdf 含 {len(hits)} 处草稿占位符（如 {hits[0][1]}），不得上传")
+    if files["programPdf"]["exists"]:
+        source_pdf = source_pdf or files["programPdf"].get("path")
+        if not source_pdf:
+            errors.append("programPdf 缺少实际文件路径，无法校验源码内容，不得上传")
+        else:
+            try:
+                validate_source_pdf(source_pdf, expected_count=files["programPdf"]["expected_pages"],
+                                    header=files["programPdf"].get("header"))
+            except SourceValidationError as exc:
+                errors.append(f"programPdf 源码内容校验失败，不得上传：{exc}")
     if files["programPdf"]["filename"] == files["docPdf"]["filename"]:
         errors.append("程序鉴别材料和文档鉴别材料不能使用同一个文件")
     return errors

@@ -9,6 +9,27 @@ from source_material_render import select_source_lines, expected_source_pages  #
 
 
 class SourceNoPaddingTests(unittest.TestCase):
+    def test_empty_source_cannot_become_a_blank_page(self):
+        for lines in ([], ["", " \t", "\u00a0"]):
+            with self.subTest(lines=lines), self.assertRaises(ValueError):
+                select_source_lines(lines, {"source_pages": 60})
+
+    def test_invalid_page_configuration_is_rejected(self):
+        for key in ("source_pages", "lines_per_page"):
+            for value in (0, -1, 1.5, True, None, "invalid"):
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    select_source_lines(["code"], {key: value})
+
+    def test_front_and_back_selection_cannot_select_only_blank_pages(self):
+        lines = [" "] * 50 + ["real code"] * 50 + [" "] * 50
+        with self.assertRaises(ValueError):
+            select_source_lines(lines, {"source_pages": 2, "lines_per_page": 50})
+
+    def test_positive_integer_strings_remain_supported(self):
+        selected, pages, per_page = select_source_lines(
+            ["code"], {"source_pages": "60", "lines_per_page": "50"})
+        self.assertEqual((selected, pages, per_page), (["code"], 1, 50))
+
     def test_short_code_is_submitted_once_without_padding(self):
         lines = [f"line {i}" for i in range(1200)]
         selected, pages, per_page = select_source_lines(lines, {"lines_per_page": 50, "source_pages": 60})

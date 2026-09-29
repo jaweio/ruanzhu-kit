@@ -8,6 +8,8 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 from aigc_rules import find_placeholders
@@ -15,7 +17,8 @@ from ai_compliance import generate as generate_ai_compliance
 from output_names import (manual_html_name, manual_pdf_name,
                           source_material_html_name, source_material_pdf_name,
                           submission_dir, manual_page_window)
-from source_material_render import write_source_html_from_config
+from source_material_render import source_header_text, source_page_boxes, write_source_html_from_config
+from source_validation import SourceValidationError, parse_source_html, validate_source_pdf
 
 CHAPTERS = ["软件概述", "软件架构", "环境要求", "安装部署", "配置说明", "使用指南", "功能模块", "运维管理", "常见问题", "附录"]
 STYLE_CHOICES = ("reference", "clean")
@@ -216,35 +219,114 @@ def render_software_pdf(root, project, style, config=None):
     print(f"{pdf} => {actual_pages} pages")
 
 
+def ensure_source_page_numbers(html, project=None):
+    """源程序左上角页眉（软件全称 + 版本号）和右上角页码（9pt），旧的窄边距 HTML 同样补上。"""
+    marker = 'id="ruanzhu-source-page-numbers"'
+    html = re.sub(r'<style\b[^>]*\bid=["\']ruanzhu-source-page-numbers["\'][^>]*>.*?</style\s*>',
+                  "", html, flags=re.I | re.S)
+    margin = re.search(r'@page\s*\{[^{}]*\bmargin(?:-top)?\s*:\s*(\d+(?:\.\d+)?)mm', html, re.I)
+    top_margin = "margin-top: 12mm;" if margin and float(margin.group(1)) < 12 else ""
+    style = f'''<style {marker}>
+@page {{ {top_margin}
+{source_page_boxes(project)}}}
+</style>'''
+    if re.search(r"</head\s*>", html, re.I):
+        return re.sub(r"</head\s*>", lambda match: style + match.group(), html, count=1, flags=re.I)
+    return style + html
+
+
+def print_source_pdf(html, pdf, work, expected, header=None):
+    """Own the temporary browser until a complete, verified PDF is available."""
+    if not CHROME:
+        raise SourceValidationError("未找到 Chrome/Chromium，无法生成并校验源程序 PDF。")
+    command = [CHROME, "--headless", "--disable-gpu", "--disable-background-networking",
+               "--no-first-run", "--no-default-browser-check", "--disable-extensions",
+               "--no-pdf-header-footer", f"--user-data-dir={work / 'chrome-profile'}",
+               f"--print-to-pdf={pdf}", html.resolve().as_uri()]
+    with (work / "chrome.log").open("w", encoding="utf-8") as log:
+        try:
+            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+        except OSError as exc:
+            raise SourceValidationError("无法启动 Chrome，原提交文件未替换。") from exc
+        deadline = time.monotonic() + 120
+        try:
+            while True:
+                # Recent Chrome versions may remain alive after printing.
+                # Only a fresh file with its PDF trailer and matching text
+                # counts as success; an existing submission is never read.
+                if pdf.is_file():
+                    with pdf.open("rb") as stream:
+                        stream.seek(max(0, pdf.stat().st_size - 128))
+                        complete = stream.read().rstrip().endswith(b"%%EOF")
+                    if complete:
+                        return validate_source_pdf(pdf, expected_pages=expected, require_page_numbers=True,
+                                                   header=header)
+                if process.poll() is not None:
+                    raise SourceValidationError("Chrome 未输出完整的源程序 PDF，原提交文件未替换。")
+                if time.monotonic() >= deadline:
+                    raise SourceValidationError("源程序 PDF 打印超时，原提交文件未替换。")
+                time.sleep(0.2)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+
+
 def render_source_pdf(root, project, config, repo=None):
-    """直接将裁剪后的源码 HTML 打印为 PDF，不依赖 LibreOffice/WPS/Word。"""
+    """Validate source input and publish only a PDF matching every HTML page."""
     d = root / project["id"]
     source_dir = d / "源程序提取"
     source_dir.mkdir(parents=True, exist_ok=True)
     html = source_dir / source_material_html_name(project)
-    if not html.exists():
-        if repo is None:
-            raise RuntimeError(
-                f"缺少源程序 HTML：{html}。请先运行 generate_source_docx.py，"
-                "或给 render_pdfs.py 传 --repo 以直接构建 Chromium 输入。"
-            )
-        collected = write_source_html_from_config(repo, config, project, html)
-        if collected["skipped"]:
-            print(f"[{project['name']}] 跳过 {len(collected['skipped'])} 个第三方文件："
-                  + "、".join(r for r, _ in collected["skipped"]), file=sys.stderr)
-        if collected["missing"]:
-            print(f"[{project['name']}] 缺失 {len(collected['missing'])} 个源码文件："
-                  + "、".join(collected["missing"]), file=sys.stderr)
-        configured = int(project.get("source_pages", 60))
-        if collected["pages"] < configured:
-            print(f"[{project['name']}] 自有代码 {len(collected['lines'])} 行，不足 {configured} 页，"
-                  f"按规则全部提交，共 {collected['pages']} 页（不重复、不补空行）", file=sys.stderr)
     final_dir = submission_dir(d)
     final_dir.mkdir(parents=True, exist_ok=True)
     pdf = final_dir / source_material_pdf_name(project)
-    run([CHROME, "--headless", "--disable-gpu", "--no-pdf-header-footer",
-         f"--print-to-pdf={pdf}", html.resolve().as_uri()])
-    print(f"{pdf} => {pages(pdf)} pages")
+    with tempfile.TemporaryDirectory(prefix=".source-render-", dir=source_dir) as temp:
+        work = Path(temp)
+        candidate_html = work / "source.html"
+        candidate_pdf = work / "source.pdf"
+        collected = None
+        if repo is not None:
+            # An explicit source root requests fresh material, including when
+            # an older HTML happens to exist. Never fall back after failure.
+            collected = write_source_html_from_config(repo, config, project, candidate_html)
+            if collected["skipped"]:
+                print(f"[{project['name']}] 跳过 {len(collected['skipped'])} 个第三方文件："
+                      + "、".join(r for r, _ in collected["skipped"]), file=sys.stderr)
+        else:
+            if not html.is_file():
+                raise SourceValidationError(
+                    f"缺少源程序 HTML：{html}。请先运行 generate_source_docx.py，"
+                    "或传 --repo 指定 source_files 的源码根目录。")
+            candidate_html.write_bytes(html.read_bytes())
+        candidate_html.write_text(
+            ensure_source_page_numbers(candidate_html.read_text(encoding="utf-8"), project), encoding="utf-8")
+        try:
+            expected = parse_source_html(candidate_html.read_text(encoding="utf-8"))
+        except (SourceValidationError, UnicodeError) as exc:
+            raise SourceValidationError(
+                f"源程序 HTML 无效：{html}：{exc}。请传 --repo 指定正确源码根目录重新取材。") from exc
+        checked = print_source_pdf(candidate_html, candidate_pdf, work, expected,
+                                   header=source_header_text(project))
+        # Stage both outputs until the PDF passes text and page-count checks.
+        candidate_html.replace(html)
+        if collected is not None:
+            record = {
+                "pages": collected["pages"],
+                "configured_pages": int(project.get("source_pages", 60)),
+                "lines_per_page": collected["lines_per_page"],
+                "code_lines": len(collected["lines"]),
+                "complete": collected["complete"],
+            }
+            record_path = work / "selection.json"
+            record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+            record_path.replace(source_dir / "源程序取材记录.json")
+        candidate_pdf.replace(pdf)
+    print(f"{pdf} => {checked['pages']} pages，逐页源码内容校验通过")
 
 
 def main():
@@ -252,7 +334,7 @@ def main():
     parser.add_argument("--config", default="soft-copyright-materials/ruanzhu.config.json")
     parser.add_argument("--style", choices=STYLE_CHOICES, default=None,
                         help="说明书样式；默认读取配置，未配置时使用 reference")
-    parser.add_argument("--repo", help="源码仓库路径；缺少源程序 HTML 时用于直接构建 Chromium 输入")
+    parser.add_argument("--repo", help="source_files 的源码根目录；提供时重新取材，不复用已有 HTML")
     args = parser.parse_args()
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
     root = Path(cfg.get("output_root", "soft-copyright-materials"))
@@ -267,12 +349,16 @@ def main():
         except PlaceholderError as exc:
             failed.append(project["id"])
             print(f"[{project['name']}] {exc}", file=sys.stderr)
-        render_source_pdf(root, project, cfg, repo)
+        try:
+            render_source_pdf(root, project, cfg, repo)
+        except SourceValidationError as exc:
+            failed.append(project["id"])
+            print(f"[{project['name']}] 源程序 PDF 未生成：{exc}", file=sys.stderr)
         declaration = generate_ai_compliance(root, cfg, project, pdf=True)
         if declaration["enabled"]:
             print(f"AI 合规声明：{declaration['directory']}（需核对并签署）")
     if failed:
-        raise SystemExit(f"说明书 PDF 未生成：{'、'.join(failed)}")
+        raise SystemExit(f"PDF 未生成：{'、'.join(dict.fromkeys(failed))}")
 
 
 if __name__ == "__main__":

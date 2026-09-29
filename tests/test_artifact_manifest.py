@@ -6,12 +6,43 @@ from pathlib import Path
 from unittest.mock import patch
 
 from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from artifact_manifest import (build_manifest, formal_material_paths,
                                verify_records)  # noqa: E402
 from output_names import manual_pdf_name, source_material_pdf_name, submission_dir  # noqa: E402
 import zhusque_check  # noqa: E402
+
+
+SOURCE_TEXT = "function calculateTotal(items) {\n  return items.reduce((sum, item) => sum + item.price, 0);\n}"
+
+
+def write_pdf(path, page_texts):
+    """Create actual extractable PDF pages, including intentional blank fixtures."""
+    writer = PdfWriter()
+    for text in page_texts:
+        page = writer.add_blank_page(width=595, height=842)
+        if text is None:
+            continue
+        font = DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        })
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        })
+        content = ["BT /F1 10 Tf 50 760 Td 14 TL"]
+        for line in text.splitlines():
+            escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            content.append(f"({escaped}) Tj T*")
+        content.append("ET")
+        stream = DecodedStreamObject()
+        stream.set_data("\n".join(content).encode("ascii"))
+        page[NameObject("/Contents")] = stream
+    with path.open("wb") as handle:
+        writer.write(handle)
 
 
 class ArtifactManifestTests(unittest.TestCase):
@@ -29,7 +60,7 @@ class ArtifactManifestTests(unittest.TestCase):
             project_dir = root / project["id"]
             final = submission_dir(project_dir)
             final.mkdir(parents=True)
-            (final / source_material_pdf_name(project)).write_bytes(b"source")
+            write_pdf(final / source_material_pdf_name(project), [SOURCE_TEXT] * 60)
             writer = PdfWriter()
             writer.add_blank_page(width=595, height=842)
             with (final / manual_pdf_name(project)).open("wb") as fh:
@@ -58,6 +89,8 @@ class ArtifactManifestTests(unittest.TestCase):
             manifest = build_manifest(Path(td) / "ruanzhu.config.json", {}, project, root)
             self.assertEqual(manifest["materials"]["programPdf"]["filename"], "AI 协作-后端源码.pdf")
             self.assertEqual(manifest["materials"]["docPdf"]["filename"], "AI 协作-后端软件说明.pdf")
+            self.assertEqual(manifest["materials"]["programPdf"]["path"],
+                             f"{project['id']}/提交材料/{source_material_pdf_name(project)}")
             self.assertEqual(manifest["checks"], [])
             self.assertTrue(manifest["ready_for_upload"])
             self.assertEqual(manifest["scope"]["submission"], ["programPdf", "docPdf"])
@@ -69,7 +102,7 @@ class ArtifactManifestTests(unittest.TestCase):
             project_dir = root / project["id"]
             final = submission_dir(project_dir)
             final.mkdir(parents=True)
-            (final / source_material_pdf_name(project)).write_bytes(b"source")
+            write_pdf(final / source_material_pdf_name(project), [SOURCE_TEXT] * 60)
             writer = PdfWriter()
             writer.add_blank_page(width=595, height=842)
             with (final / manual_pdf_name(project)).open("wb") as fh:
@@ -106,7 +139,7 @@ class ArtifactManifestTests(unittest.TestCase):
             (project_dir / "提交材料").mkdir(parents=True)
             source = project_dir / "提交材料" / "AI-后端源码.pdf"
             doc = project_dir / "提交材料" / "AI-后端软件说明.pdf"
-            source.write_bytes(b"source")
+            write_pdf(source, [SOURCE_TEXT])
             doc.write_bytes(b"doc")
             manifest = {
                 "_schema": "ruanzhu-kit.material-manifest.v1",
@@ -131,6 +164,64 @@ class ArtifactManifestTests(unittest.TestCase):
             "docPdf": "../提交材料/AI 协作-后端软件说明.pdf",
         })
         self.assertTrue(any("programPdf 配置文件名不一致" in error for error in errors))
+
+    def _source_records(self, path, pages, expected_pages):
+        files, form = self._doc_files()
+        files["programPdf"].update({
+            "path": str(path), "pages": pages, "expected_pages": expected_pages,
+        })
+        return files, form
+
+    def test_verify_rejects_sixty_blank_source_pages(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "a源码.pdf"
+            write_pdf(source, [None] * 60)
+            files, form = self._source_records(source, 60, 60)
+            errors = verify_records(files, form)
+            self.assertTrue(any("programPdf" in error for error in errors), errors)
+
+    def test_verify_rejects_corrupt_source_pdf_even_when_page_count_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "a源码.pdf"
+            source.write_bytes(b"corrupt source pdf")
+            files, form = self._source_records(source, None, 60)
+            errors = verify_records(files, form)
+            self.assertTrue(any("programPdf" in error for error in errors), errors)
+
+    def test_verify_rejects_source_pdf_with_one_blank_page(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "a源码.pdf"
+            write_pdf(source, [SOURCE_TEXT, None, SOURCE_TEXT])
+            files, form = self._source_records(source, 3, 3)
+            errors = verify_records(files, form)
+            self.assertTrue(any("programPdf" in error for error in errors), errors)
+
+    def test_unknown_legacy_page_count_cannot_bypass_source_page_requirement(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "a源码.pdf"
+            write_pdf(source, [SOURCE_TEXT])
+            files, form = self._source_records(source, None, 60)
+            errors = verify_records(files, form)
+            self.assertTrue(any("programPdf" in error and "页数不一致" in error for error in errors), errors)
+
+    def test_verify_accepts_valid_source_pdf_using_record_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "a源码.pdf"
+            write_pdf(source, [SOURCE_TEXT] * 2)
+            files, form = self._source_records(source, 2, 2)
+            self.assertEqual(verify_records(files, form), [])
+
+    def test_verify_uses_resolved_source_argument_over_relative_record_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "a源码.pdf"
+            write_pdf(source, [SOURCE_TEXT])
+            files, form = self._source_records("01-ai/提交材料/a源码.pdf", 1, 1)
+            self.assertEqual(verify_records(files, form, source_pdf=source), [])
+
+    def test_verify_fails_closed_without_source_path(self):
+        files, form = self._doc_files()
+        errors = verify_records(files, form)
+        self.assertTrue(any("programPdf" in error for error in errors), errors)
 
     def _doc_files(self):
         return {

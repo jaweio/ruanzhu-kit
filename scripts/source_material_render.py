@@ -15,6 +15,7 @@ from pathlib import Path
 from copyright_check import redact_line
 from oss_scrub import own_tokens, scrub_code, third_party_reasons
 from source_material import compact_blank_lines, strip_comments, strip_imports
+from source_validation import SourceValidationError
 
 
 def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=True,
@@ -27,7 +28,7 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
     stats = {"headers": 0, "dropped": 0, "comments": 0, "imports": 0, "blank_lines": 0}
     for rel in files:
         p = repo / rel
-        if not p.exists():
+        if not p.is_file():
             missing.append(rel)
             continue
         text = p.read_text(encoding="utf-8", errors="ignore")
@@ -70,9 +71,23 @@ _FONT_FILES = ("/System/Library/Fonts/HelveticaNeue.ttc", "/System/Library/Fonts
 _measure_cache = {}
 
 
+def _positive_integer(value, name):
+    """Reject malformed pagination instead of silently truncating or coercing it."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise SourceValidationError(f"{name} 必须是正整数，实际为 {value!r}")
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise SourceValidationError(f"{name} 必须是正整数，实际为 {value!r}") from exc
+    if number <= 0:
+        raise SourceValidationError(f"{name} 必须是正整数，实际为 {value!r}")
+    return number
+
+
 def page_lines(project):
     """每页代码行数：默认且至少 50 行。"""
-    return max(MIN_LINES_PER_PAGE, int(project.get("lines_per_page", MIN_LINES_PER_PAGE)))
+    return max(MIN_LINES_PER_PAGE, _positive_integer(
+        project.get("lines_per_page", MIN_LINES_PER_PAGE), "lines_per_page"))
 
 
 def page_metrics(project, selected_lines=None):
@@ -139,6 +154,21 @@ def wrap_rows(lines, font_size, width_pt=PAGE_BODY_WIDTH_PT):
     return rows
 
 
+def _validate_selected_pages(lines, pages, lines_per_page):
+    """Every output page must contain source; page counts must cover all rows."""
+    if not lines or not any(line.strip() for line in lines):
+        raise SourceValidationError("源程序取材结果为空或仅含空白，拒绝生成空白材料")
+    actual_pages = math.ceil(len(lines) / lines_per_page)
+    if pages != actual_pages:
+        raise SourceValidationError(
+            f"源程序页数与取材不一致：{len(lines)} 行、每页 {lines_per_page} 行应为 "
+            f"{actual_pages} 页，实际要求 {pages} 页")
+    for page in range(pages):
+        chunk = lines[page * lines_per_page : (page + 1) * lines_per_page]
+        if not any(line.strip() for line in chunk):
+            raise SourceValidationError(f"源程序第 {page + 1} 页仅含空白，拒绝生成空白材料")
+
+
 def select_source_lines(lines, project):
     """按软著首尾取材规则选取源程序行。
 
@@ -146,17 +176,33 @@ def select_source_lines(lines, project):
     绝不重复代码、绝不补空行凑页数。
     """
     lines_per_page = page_lines(project)
-    pages = int(project.get("source_pages", 60))
+    pages = _positive_integer(project.get("source_pages", 60), "source_pages")
     if len(lines) <= pages * lines_per_page:
-        return list(lines), max(1, math.ceil(len(lines) / lines_per_page)), lines_per_page
-    front_pages = pages // 2
-    back_pages = pages - front_pages
-    selected = lines[: front_pages * lines_per_page] + lines[-back_pages * lines_per_page :]
+        selected = list(lines)
+        pages = math.ceil(len(selected) / lines_per_page)
+    else:
+        front_pages = pages // 2
+        back_pages = pages - front_pages
+        selected = lines[: front_pages * lines_per_page] + lines[-back_pages * lines_per_page :]
+    _validate_selected_pages(selected, pages, lines_per_page)
     return selected, pages, lines_per_page
 
 
 def collect_source_material(repo, project, tokens=(), cli_keep_comments=False,
                             cli_keep_imports=False):
+    repo = Path(repo).resolve()
+    source_files = project.get("source_files", [])
+    if not isinstance(source_files, (list, tuple)) or not source_files:
+        raise SourceValidationError(f"未配置有效的 source_files；--repo={repo}")
+    if any(not isinstance(rel, str) or not rel.strip() for rel in source_files):
+        raise SourceValidationError(f"source_files 必须是非空文件路径列表；--repo={repo}")
+    missing_paths = [rel for rel in source_files if not (repo / rel).is_file()]
+    if missing_paths:
+        details = "\n".join(f"  - {rel} -> {(repo / rel).resolve()}" for rel in missing_paths)
+        raise SourceValidationError(
+            f"源程序取材失败：--repo={repo}\n"
+            f"缺失或不是普通文件的 source_files（{len(missing_paths)} 个）：\n{details}\n"
+            "请检查 --repo 是否为这些相对路径对应的源码根目录；拒绝生成不完整或空白材料。")
     source_material = project.get("source_material", {}) or {}
     if not isinstance(source_material, dict):
         source_material = {}
@@ -168,15 +214,25 @@ def collect_source_material(repo, project, tokens=(), cli_keep_comments=False,
         trim_imports = False
     max_blank_lines = max(0, min(int(source_material.get("max_blank_lines", 0)), 3))
     lines, missing, skipped, stats = read_lines(
-        repo, project.get("source_files", []), project.get("redact", True), tokens,
+        repo, source_files, project.get("redact", True), tokens,
         project.get("scrub_open_source", True), trim_comments, trim_imports, max_blank_lines,
     )
+    if missing:
+        raise SourceValidationError(
+            f"源程序读取期间文件已不存在；--repo={repo}；缺失路径："
+            + "、".join(str((repo / rel).resolve()) for rel in missing))
+    if not any(line.strip() for line in lines):
+        raise SourceValidationError(
+            f"源程序取材结果为空或仅含空白；--repo={repo}；"
+            f"已配置 {len(source_files)} 个文件，跳过第三方文件 {len(skipped)} 个。"
+            "请检查 source_files、第三方排除及注释/导入裁剪设置；拒绝生成空白材料。")
     # 选材按“显示行”计：长行先折行，每页正好 50 行（含折行），首尾取材和页数都以此为准
     rows = wrap_rows(lines, page_metrics(project)[1])
     selected, pages, lines_per_page = select_source_lines(rows, project)
     return {
         "lines": lines,
         "selected": selected,
+        "complete": len(selected) == len(rows),
         "pages": pages,
         "lines_per_page": lines_per_page,
         "missing": missing,
@@ -188,8 +244,28 @@ def collect_source_material(repo, project, tokens=(), cli_keep_comments=False,
     }
 
 
+def source_header_text(project):
+    """页眉：软件全称 + 版本号，与申请表 softwareName / version 同源。"""
+    name = str(project.get("name", "")).strip()
+    version = str(project.get("version", "V1.0")).strip()
+    return f"{name} {version}".strip()
+
+
+def source_page_boxes(project=None):
+    """源程序页边距内容：左上角页眉（软件全称 + 版本号），右上角阿拉伯数字页码，均为 9pt。"""
+    boxes = "  @top-right { content: counter(page); font-size: 9pt; color: #555; }\n"
+    header = source_header_text(project) if project else ""
+    if header:
+        quoted = header.replace("\\", "\\\\").replace('"', '\\"')
+        boxes = f'  @top-left {{ content: "{quoted}"; font-size: 9pt; color: #555; }}\n' + boxes
+    return boxes
+
+
 def build_source_html(project, selected_lines, pages, lines_per_page):
     """生成只包含代码页的可打印 HTML，不显示标题、页眉或页脚。"""
+    pages = _positive_integer(pages, "pages")
+    lines_per_page = _positive_integer(lines_per_page, "lines_per_page")
+    _validate_selected_pages(selected_lines, pages, lines_per_page)
     row_height, font_size = page_metrics(project)
     body = []
     for page in range(pages):
@@ -203,8 +279,7 @@ def build_source_html(project, selected_lines, pages, lines_per_page):
 <html lang="zh-CN"><head><meta charset="utf-8"><title>{escape(str(project.get("name", "源程序鉴别材料")))}</title>
 <style>
 @page {{ size: A4 portrait; margin: {MARGIN_MM["top"]}mm {MARGIN_MM["right"]}mm {MARGIN_MM["bottom"]}mm {MARGIN_MM["left"]}mm;
-  @top-right {{ content: counter(page); font-size: 9pt; color: #555; }}
-}}
+{source_page_boxes(project)}}}
 * {{ box-sizing: border-box; }}
 html, body {{ margin: 0; padding: 0; background: #fff; }}
 body {{ color: #111; overflow: hidden; }}
@@ -221,6 +296,8 @@ body {{ color: #111; overflow: hidden; }}
   line-height: {row_height}pt;
   font-size: {font_size}pt;
   font-family: {FONT_STACK};
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "clig" 0;
   white-space: pre;
   overflow: hidden;
   margin: 0;
