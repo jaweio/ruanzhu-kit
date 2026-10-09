@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pymupdf
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from workflow_smoke import run  # noqa: E402
 
@@ -41,6 +43,19 @@ class WorkflowSmokeTests(unittest.TestCase):
                 page[NameObject("/Contents")] = stream
                 with path.open("wb") as handle:
                     writer.write(handle)
+            # The upload gate now verifies the manual's real running header and
+            # page density. Replace the generic placeholder PDF with one that
+            # satisfies those constraints for this unrelated smoke scenario.
+            document = pymupdf.open()
+            page = document.new_page()
+            page.insert_text((60, 30), "Demo software V1.0", fontsize=9)
+            page.insert_text((530, 30), "1", fontsize=9)
+            page.insert_text((60, 80), "Demo software manual body", fontsize=12)
+            page.insert_text((60, 300), "Operation notes", fontsize=12)
+            manual_pdf = final_dir / "演示-后端软件说明.pdf"
+            manual_pdf.unlink()
+            document.save(manual_pdf)
+            document.close()
             (project_dir / "材料上传清单.json").write_text(json.dumps({
                 "_schema": "ruanzhu-kit.material-manifest.v1",
                 "materials": {

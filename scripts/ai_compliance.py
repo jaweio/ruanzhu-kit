@@ -86,6 +86,15 @@ def paragraphs(cfg, project, opts):
                   version_intro=f"（版本号：{version}）" if version else "")
     templates = json.loads((ASSETS / "ai-compliance-content.json").read_text(encoding="utf-8"))
     result = {key: text.format_map(values) for key, text in templates.items()}
+    overrides = opts.get("paragraphs", {})
+    if not isinstance(overrides, dict):
+        raise ValueError("ai_compliance.paragraphs 必须为对象")
+    editable = {"p09", "p10", "p11", "p12", "p13", "p14", "p16", "p18"}
+    for key, value in overrides.items():
+        if key not in editable or not isinstance(value, str) or not value.strip() \
+                or find_placeholders(value):
+            raise ValueError("ai_compliance.paragraphs 只能覆盖非空的声明正文段落")
+        result[key] = fact(value)
     raw_date = fact(opts.get("declaration_date"))
     if raw_date:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_date):
@@ -177,9 +186,22 @@ def print_pdf(command, candidate):
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+                except PermissionError:
+                    # Some hosts disallow signaling the process group even
+                    # though the Chromium parent remains ours to stop.
+                    if process.poll() is None:
+                        try:
+                            process.kill()
+                        except (ProcessLookupError, PermissionError):
+                            pass
             elif process.poll() is None:
                 process.kill()
-            process.wait(timeout=5)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # A completed candidate PDF is still usable if an isolated
+                # Chromium helper cannot be reaped on this host.
+                pass
 
 
 def generate(root, cfg, project, *, mode=None, pdf=False):

@@ -59,6 +59,7 @@ python3 scripts/ai_compliance.py --config <配置> --project <项目id> --mode a
 - `assets/ai-compliance-template.docx`：从参考 Word 保留的一页 A4 版式；已删除软件、权利人、日期和作者元数据，使用固定文本插槽。
 - `assets/ai-compliance-content.json`：四部分正文（基本信息、合规承诺、原创性、责任）。正文改为适用范围内的承诺，不自动声明已训练模型、已备案或已完成安全评估。
 - 第三方模型、代码、接口和数据的权利与本次登记范围区分，不照抄“核心代码与模型均为原创”的无依据承诺。
+- 项目级 `ai_compliance.paragraphs` 可覆盖 `p09`～`p14`、`p16`、`p18` 的正文，用于写入经源码和运行记录核验的项目事实；身份、签章、日期等固定插槽不可覆盖。覆盖内容须为非空文字，不得含占位符。
 - 固定声明文体不参加自动 AIGC 风格改写；仍需核对真实信息和签署条件。
 
 文档生成完全本地，不读取账号密码，不上传材料。生成 PDF 沿用现有 Chromium 打印链路，不新增 Office 依赖。

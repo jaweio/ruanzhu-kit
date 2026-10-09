@@ -9,9 +9,9 @@ R11 申请表的字段散在 config、说明书、源码统计里，手工誊抄
   软件全称/简称/版本/分类  ← ruanzhu.config.json 的 projects[]
     开发完成日期/发表状态 ← ruanzhu.config.json 顶层（发表状态默认“未发表”）
     著作权人                ← 版权中心登录账户；只在页面回读，不要求本地重复填写
-  源程序量                ← 说明书素材.json 的全项目源码行数（不是取材行数）
+  源程序量                ← 说明书素材.json；明确按自有源码申报时，逐文件统计 source_files
   编程语言                ← 说明书素材.json 的 by_ext 统计
-  开发/运行环境           ← ruanzhu.config.json 的 env 字段，缺了就留占位并在校验里报出来
+  开发/运行环境           ← ruanzhu.config.json 的 environment_profile / env 字段，缺失则留空并报校验问题
   软件主要功能            ← 说明书“功能模块”章节，按模块拼成 500–1300 字初稿
   两份 PDF                ← 材料目录里实际存在的文件
 
@@ -79,6 +79,33 @@ def languages(spec):
     return (ranked[0] if ranked else ""), "、".join(ranked[1:4])
 
 
+def source_line_count(project, spec):
+    """Count the declared owned-code scope when an inherited repository needs it.
+
+    This is raw physical source lines, before the PDF's comment/import trimming.
+    Never silently substitute all repository files, which may include upstream code.
+    """
+    mode = project.get("source_count_mode")
+    if mode not in (None, "source_files"):
+        raise ValueError(f"不支持的 source_count_mode：{mode}")
+    if mode != "source_files":
+        return str(spec["stats"]["source_lines"]) if spec else ""
+    raw_repo = (spec or {}).get("repo")
+    if not raw_repo:
+        raise ValueError("按 source_files 统计源程序量需要素材中的 spec.repo")
+    repo = Path(str(raw_repo))
+    files = project.get("source_files") or []
+    if not repo.is_dir() or not files or len(files) != len(set(files)):
+        raise ValueError("按 source_files 统计源程序量需要有效的 spec.repo 和无重复的 source_files")
+    count = 0
+    for relative in files:
+        path = (repo / relative).resolve()
+        if not path.is_relative_to(repo.resolve()) or not path.is_file():
+            raise ValueError(f"源程序量取材文件不存在或越界：{relative}")
+        count += len(path.read_text(encoding="utf-8").splitlines())
+    return str(count)
+
+
 def main_function_draft(manual_md, project):
     """从说明书“功能模块”章节拼主要功能初稿：模块名 + 功能说明 + 首条操作步骤。"""
     if not manual_md.exists():
@@ -125,9 +152,9 @@ def build(cfg, project, root, spec, args):
         "_environmentSources": env_sources,
         "step1_identity": {
             "applicantRole": cfg.get("applicant_role", "我是申请人"),
-            "applicantType": cfg.get("applicant_type", "企业法人"),
-            "developType": cfg.get("develop_type", "独立开发"),
-            "acquireType": cfg.get("acquire_type", "原始取得"),
+            "applicantType": cfg.get("applicant_type", ""),
+            "developType": cfg.get("develop_type", ""),
+            "acquireType": cfg.get("acquire_type", ""),
         },
         "step2_basic": {
             "softwareName": project["name"],
@@ -147,7 +174,7 @@ def build(cfg, project, root, spec, args):
             "runSupport": fact(env.get("run_support", "")),
             "language": lang,
             "languageOther": lang_other,
-            "sourceLines": str(spec["stats"]["source_lines"]) if spec else "",
+            "sourceLines": source_line_count(project, spec),
         },
         "step4_features": {
             "devPurpose": fact(project.get("dev_purpose", "")),
@@ -183,7 +210,7 @@ REQUIRED = {
 }
 
 
-def validate(form, d, spec):
+def validate(form, d, spec, project=None):
     issues = []
 
     def add(level, field, msg, how):
@@ -223,7 +250,7 @@ def validate(form, d, spec):
     manual = d / "软件说明书.md"
     if manual.exists() and name not in manual.read_text(encoding="utf-8"):
         add("high", "softwareName", "说明书里找不到相同的软件全称", "各材料名称必须完全一致")
-    if spec and flat.get("sourceLines", "").isdigit():
+    if spec and flat.get("sourceLines", "").isdigit() and (project or {}).get("source_count_mode") != "source_files":
         if int(flat["sourceLines"]) != spec["stats"]["source_lines"]:
             add("medium", "sourceLines", "与素材统计不一致", "重跑 manual_spec.py 后再生成")
     return issues
@@ -240,7 +267,7 @@ def copy_md(form, issues, project):
             ["开发操作系统", s3["devOS"]], ["开发工具", s3["devTools"]],
             ["运行操作系统", s3["runOS"]], ["运行支撑环境", s3["runSupport"]],
             ["编程语言", s3["language"] + (f"（其他：{s3['languageOther']}）" if s3["languageOther"] else "")],
-            ["源程序量", f"{s3['sourceLines']} 行（全项目源码行数）" if s3["sourceLines"] else ""],
+            ["源程序量", f"{s3['sourceLines']} 行（{project.get('source_scope', '按当前说明书素材统计')}）" if s3["sourceLines"] else ""],
             ["开发目的", s4["devPurpose"]], ["面向领域", s4["targetIndustry"]],
             ["技术特点标签", s4["techFeatureTag"]], ["技术特点", s4["techFeatureText"]]]
     out = [f"# {project['name']} {s2['version']} 申请表填报文案", "",
@@ -277,7 +304,7 @@ def main():
         d = root / project["id"]
         (d / "auto-fill").mkdir(parents=True, exist_ok=True)
         form = build(cfg, project, root, spec, args)
-        issues = validate(form, d, spec)
+        issues = validate(form, d, spec, project)
         (d / "auto-fill" / "config.json").write_text(json.dumps(form, ensure_ascii=False, indent=2), encoding="utf-8")
         (d / "申请表填报文案.md").write_text(copy_md(form, issues, project), encoding="utf-8")
         high = sum(1 for i in issues if i["level"] == "high")

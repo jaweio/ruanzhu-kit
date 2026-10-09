@@ -11,7 +11,17 @@ except ImportError:  # 可选依赖，未安装时跳过本文件
     canvas = None
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from source_validation import SourceValidationError, parse_source_html, validate_source_pdf
+from source_validation import SourceValidationError, parse_source_html, validate_source_pdf, _page_text_candidates
+
+
+class PdfGlyphMappingTests(unittest.TestCase):
+    def test_kangxi_radical_misread_of_mouth_is_narrowly_allowed(self):
+        candidates = _page_text_candidates("Demo V1.0 1\n接口\n", 1, "Demo V1.0")
+        self.assertIn("接口", candidates)
+        misread = _page_text_candidates("Demo V1.0 1\n接\u2f1c\n", 1, "Demo V1.0")
+        self.assertIn("接口", misread)
+        ordinary_you = _page_text_candidates("Demo V1.0 1\n接又\n", 1, "Demo V1.0")
+        self.assertNotIn("接口", ordinary_you)
 
 
 class SourceHTMLValidationTests(unittest.TestCase):

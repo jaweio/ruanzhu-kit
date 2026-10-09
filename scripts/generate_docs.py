@@ -28,9 +28,11 @@ SOURCE_PATH_RE = re.compile(
     r"|(?<![\w@])(?:server|apps|packages|src|app|data|components|internal|cmd|ios)/[A-Za-z0-9_.()\[\]-]+\.(?:tsx|jsx|go|ts|js|py|java|swift|rs|vue|css|scss|sql|html|env(?:\.[A-Za-z0-9_-]+)*)"
 )
 MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]+\]\([^)]*\)")
+LOCAL_HTTP_URL_RE = re.compile(r"https?://(?:127\.0\.0\.1|localhost)(?::\d+)?/[A-Za-z0-9_{}?=&./-]*")
 API_PATH_RE = re.compile(
-    r"(?<![\w])/(?:api/|health\b|readyz\b|healthz\b|auth/|ws\b|uploads/|plugin-surfaces/|workspaces/|tasks/|runtimes/)[A-Za-z0-9_{}?=&./-]*"
+    r"(?<![\w])/(?:api/|health\b|readyz\b|healthz\b|auth/|ai/|ws\b|uploads/|plugin-surfaces/|workspaces/|tasks/|runtimes/)[A-Za-z0-9_{}?=&./-]*"
 )
+VIRTUAL_PATH_RE = re.compile(r"\{\{virtual-path:([A-Za-z0-9_./-]{1,160})\}\}")
 MISSING_FACT_RE = re.compile(r"^\s*(?:待确认|待填写|待补充|待核验)(?:\s*[（(].*)?\s*$")
 
 
@@ -54,10 +56,22 @@ def manual_safe(value):
         preserved.append(match.group(0))
         return f"@@RUANZHU_LINK_{len(preserved) - 1}@@"
 
+    def preserve_virtual_path(match):
+        path = match.group(1)
+        parts = path.split("/")
+        if path.startswith("/") or any(part in ("", ".", "..") for part in parts):
+            raise ValueError(f"invalid virtual path in manual: {path}")
+        preserved.append(path)
+        return f"@@RUANZHU_LINK_{len(preserved) - 1}@@"
+
     text = MARKDOWN_LINK_RE.sub(preserve_link, text)
+    text = LOCAL_HTTP_URL_RE.sub(preserve_link, text)
     # REST paths are user-facing facts, not local source paths.  Protect them
     # before SOURCE_PATH_RE removes slash-delimited implementation paths.
     text = API_PATH_RE.sub(preserve_link, text)
+    # Caller-provided virtual paths in examples are valid user-facing values.
+    # Preserve only explicitly marked relative paths; other source paths stay scrubbed.
+    text = VIRTUAL_PATH_RE.sub(preserve_virtual_path, text)
     text = SOURCE_PATH_RE.sub("对应业务模块", text)
     replacements = {
         "后端源码范围": "服务功能范围",
@@ -437,25 +451,27 @@ def backend_module_playbook(name):
 
 
 def backend_module_sections(project, shots=None, used=None):
-    """Backend-specific module prose with real request order and recovery branches."""
+    """Use only project-supplied request steps and failure behavior.
+
+    A backend label alone does not imply particular routes, auth rules, or
+    storage technology. Omit missing facts rather than borrowing a playbook.
+    """
     shots, used = shots or {}, used if used is not None else set()
+    playbooks = project.get("module_playbooks") or {}
     out = []
     for i, (name, desc) in enumerate(modules(project), 2):
-        playbook = backend_module_playbook(name)
-        # Keep the configured description as a short factual anchor, but split
-        # its semicolon-heavy list into sentences so the manual does not repeat
-        # the same “能力；能力；能力” cadence for every module.
+        playbook = playbooks.get(name) or {}
         fact = str(desc).replace("；", "。")
         if fact and not fact.endswith(("。", "！", "？")):
             fact += "。"
-        steps = "\n".join(f"{n}. {step}" for n, step in enumerate(playbook["steps"], 1))
-        out.append(
-            f"## 7.{i} {name}\n\n"
-            f"（一）功能说明\n\n{fact}\n\n"
-            f"（二）操作步骤\n\n{steps}\n\n"
-            f"（三）异常处理\n\n{playbook['failure']}\n"
-            + shot_md(name, shots, used)
-        )
+        sections = [f"## 7.{i} {name}", "", "（一）功能说明", "", fact, ""]
+        steps = [str(step).strip() for step in playbook.get("steps", []) if str(step).strip()]
+        if steps:
+            sections += ["（二）操作步骤", "", "\n".join(f"{n}. {step}" for n, step in enumerate(steps, 1)), ""]
+        failure = str(playbook.get("failure") or "").strip()
+        if failure:
+            sections += ["（三）异常处理", "", failure, ""]
+        out.append("\n".join(sections) + shot_md(name, shots, used))
     return "\n".join(out)
 
 
@@ -477,98 +493,8 @@ def toc(chapters):
 
 
 def backend_extra_content(title, body):
-    """Rewrite common backend appendix paragraphs around concrete interfaces.
-
-    The project config remains the source of facts.  This adapter changes the
-    document shape for the recurring backend chapters so they read like an
-    operator's notes instead of repeating a generic chapter introduction.
-    """
-    title = str(title).strip()
-    body = str(body).strip()
-    overrides = {
-        "接口调用与数据对象": (
-            "本章按调用顺序整理接口：先看健康检查，再看用户和工作区，随后进入问题协作、运行时调度、附件、插件和外部回调。"
-            "每一类都注明认证边界；实际请求仍以当前服务注册的路由和响应字段为准。"
-        ),
-        "部署、运维与安全治理": (
-            "部署时先准备 PostgreSQL 和 Redis，完成迁移后再启动服务。"
-            "运行中的排查从 /health、/readyz 和结构化日志开始，多节点环境再检查 Redis 中继、租约和 CORS 配置。"
-        ),
-        "典型业务流程": (
-            "下面按一次真实任务的先后顺序说明调用关系：用户建立身份，进入工作区，创建问题，运行时领取并回传，成员最后完成验收。"
-        ),
-        "接口错误与诊断参考": (
-            "本章按状态码和故障证据整理处理顺序。先保留请求标识、资源 ID 和响应状态，再检查身份、租约、数据库、Redis 或 WebSocket。"
-        ),
-        "接口分层与请求上下文": (
-            "先区分公开探针和业务接口。/health、/readyz 只返回进程或依赖状态；"
-            "用户请求需要会话 Cookie 或 JWT，运行时请求需要注册令牌，Webhook 请求需要签名或连接标识。"
-            "工作区接口还会把成员角色放入请求上下文，调用方不能只凭用户 ID 读取其他工作区的数据。"
-        ),
-        "用户、工作区与成员对象": (
-            "GET /api/me 返回当前用户资料，GET /api/workspaces 返回可访问的工作区。"
-            "POST /api/workspaces 创建空间时同时建立所有者成员记录；成员邀请、角色变更和移除都在工作区 ID 下完成。"
-            "调用方应保留工作区 ID，不能把用户 ID 当成跨工作区的访问凭证。"
-        ),
-        "问题、评论与时间线": (
-            "POST /api/issues 保存标题和协作字段，问题详情还可以关联负责人、项目、父问题、日期、附件和标签。"
-            "更新、评论和订阅分别使用问题资源下的入口，GET /api/issues/{id}/timeline 用来回看变更顺序。"
-            "搜索和组合查询服务于不同的筛选条件，调用方应按工作区和状态缩小查询范围。"
-        ),
-        "运行时任务状态": (
-            "运行时先 POST /api/daemon/register 建立设备身份，再用 /api/daemon/heartbeat 刷新在线状态。"
-            "POST /api/daemon/tasks/claim 创建任务租约；开始、进度、消息、完成、失败和取消确认接口都必须带同一个 taskId。"
-            "租约过期或心跳停止后，服务端按任务状态进入恢复处理，原设备不应继续写入进度。"
-        ),
-        "文件、插件与扩展边界": (
-            "附件上传、普通下载和 signed-download 都先检查工作区权限，短时能力凭证过期后需要重新申请。"
-            "插件包安装前可以预览，启用、停用和卸载分别对应安装记录；插件动作与 MCP 工具调用要在授权范围内执行。"
-            "文件路径或插件包本身不能绕过成员权限。"
-        ),
-        "回调与错误处理": (
-            "外部回调先校验签名或令牌，再识别连接和事件类型，最后写入问题、评论、通知或执行结果。"
-            "收到 400 时修正 JSON 字段，收到 401 或 403 时检查身份和工作区角色，收到 409 时重新读取资源，"
-            "收到 503 时先查看 /readyz、数据库迁移和 Redis 状态。"
-        ),
-        "用户进入工作区": (
-            "客户端先访问 /api/me 确认登录状态，再读取 /api/workspaces。"
-            "所有者通过成员入口发送邀请；成员接受后，问题、项目、评论和运行时资源才会出现在该工作区的授权范围内。"
-        ),
-        "创建问题并安排执行": (
-            "成员向 POST /api/issues 提交标题、描述、状态、优先级以及负责人或项目关系。"
-            "服务端返回问题编号并记录时间线；运行时领取时还会再次检查工作区、负责人和运行时能力。"
-        ),
-        "运行时领取和回传": (
-            "运行时完成注册和心跳后调用领取入口，服务端返回带租约的任务。"
-            "执行期间按开始、进度、消息、用量和最终结果回传，服务端同时更新问题记录、时间线和实时事件。"
-        ),
-        "协作消息与人工验收": (
-            "评论和状态变化通过 /ws 推送给已连接客户端。"
-            "如果连接中断，先恢复用户和工作区身份，再用问题详情、评论和时间线接口补齐记录；成员核对附件和执行消息后更新验收状态。"
-        ),
-        "外部事件进入协作流": (
-            "GitHub 或其他版本控制平台把事件送到 Webhook 入口后，服务端先验证签名和连接关系。"
-            "事件随后转成问题、评论或通知，并按响应状态决定是否重试；重复事件先查外部事件标识和时间线。"
-        ),
-        "任务租约与重复执行": (
-            "POST /api/daemon/tasks/claim 返回的是带租约的任务记录，不是普通列表。"
-            "运行时随后调用 start、progress、messages 和 complete 或 fail，taskId、runtime_id 和租约时间要能对应起来。"
-            "如果心跳停止，先查最后一次心跳和时间线，再判断任务是否已进入恢复分支。"
-        ),
-        "数据库与 Redis 依赖": (
-            "数据库故障通常先出现在 /readyz、迁移检查或业务写入中；Redis 故障会影响缓存、租约、队列和多节点中继。"
-            "恢复时先确认连接地址和凭证，再核对迁移与 Redis 可用性，最后用一条最小业务请求复核。"
-        ),
-        "WebSocket 与断线补偿": (
-            "客户端连接 /ws 后接收评论、任务状态和进度事件。断线时重新建立用户和工作区身份，"
-            "再用问题详情、评论和 GET /api/issues/{id}/timeline 补齐缺失记录。多节点环境还要看 Redis 中继是否启用。"
-        ),
-        "外部集成回调": (
-            "回调处理依次经过签名或令牌校验、连接识别、事件解析、业务写入和状态返回。"
-            "收到重复回调时先查外部事件标识与时间线；签名失败则保留请求时间和状态码，不把密钥写入日志。"
-        ),
-    }
-    return overrides.get(title, body)
+    """Preserve verified project text; never inject another product's routes."""
+    return str(body).strip()
 
 
 def extra_chapters(project, chapters):
@@ -668,9 +594,9 @@ def hardware_section(project, spec=None):
         dev = str(env.get("dev_hardware", "")).strip()
         run = str(env.get("run_hardware", "")).strip()
         if dev:
-            rows.append(["开发设备", dev, "Go 服务编译、Docker 构建和本地联调。"])
+            rows.append(["开发硬件环境", dev, str(project.get("dev_hardware_usage") or "开发、构建和本地验证。")])
         if run:
-            rows.append(["运行设备", run, "部署服务进程；数据库和 Redis 容量按实际负载规划。"])
+            rows.append(["运行硬件环境", run, str(project.get("run_hardware_usage") or "运行服务进程。")])
         return table(rows, ["环境", "建议配置", "用途"])
     rows = hardware_rows({**project, "env": env})
     headers = ["硬件项", "最低配置", "推荐配置"] if rows and len(rows[0]) == 3 else ["环境", "配置"]
@@ -684,8 +610,9 @@ def environment_rows(project, spec=None):
         return rows
     env, _ = resolve_environment(project, spec=spec)
     rows = []
-    for label, key in (("操作系统", "run_os"), ("运行支持", "run_support"),
-                       ("开发工具", "dev_tools"), ("开发语言", "language"),
+    for label, key in (("开发操作系统", "dev_os"), ("开发工具", "dev_tools"),
+                       ("运行操作系统", "run_os"), ("运行支撑环境", "run_support"),
+                       ("开发语言", "language"),
                        ("其他技术", "language_other")):
         value = str(env.get(key, "")).strip()
         if value:
@@ -711,42 +638,19 @@ def development_goals(project):
 
 
 def backend_first_check(project):
-    """A short, useful first-run check for backend manuals.
-
-    It keeps the overview tied to an action an operator can perform instead
-    of ending on an abstract capability summary.
-    """
-    if not backend_project(project):
-        return ""
-    return (
-        "首次部署先访问 GET /health；返回 200 后再访问 GET /readyz。"
-        "如果 /readyz 返回 503，先看 PostgreSQL 连接和 schema_migrations，再检查 Redis 初始化日志。"
-    )
+    """First-run check is an explicit, verified project fact."""
+    return str(project.get("first_run_check") or "").strip()
 
 
 def backend_verification_rows(project, spec=None):
-    """Backend checks should describe a request and an observable response."""
-    if not backend_project(project, spec):
-        return configured_rows(project, "verification", ["验证项", "实际验证方式"], "实际部署验证")
-    return [
-        ["进程探测", "发送 GET /health；确认 HTTP 200 且 status 为 ok。连接失败时先查服务进程和监听地址。"],
-        ["数据库就绪", "发送 GET /readyz；检查 checks.db 和 checks.migrations。返回 503 时对照 DATABASE_URL 与迁移版本。"],
-        ["用户会话", "带登录会话调用 GET /api/me；确认响应里的用户标识与当前账号一致。返回 401 时重新登录并检查 Cookie 或 JWT。"],
-        ["任务执行", "调用 POST /api/issues 创建问题，记下 issue ID；由运行时领取任务并回传进度，再读取该问题的 timeline 核对记录。"],
-        ["实时事件", "以工作区身份连接 /ws，更新一条问题或评论后检查连接是否收到事件；未收到时读取 timeline，并核对 Redis 中继配置。"],
-    ]
+    """Never substitute another backend's endpoints for missing checks."""
+    return configured_rows(project, "verification", ["验证项", "实际验证方式"], "实际部署验证")
 
 
 def backend_configuration_overview(project, spec=None):
-    """Explain backend settings through startup effects and concrete failure checks."""
-    if not backend_project(project, spec):
-        return configured_text(project, "configuration_overview", "项目实际配置项和生效方式")
-    return (
-        "服务启动时从 DATABASE_URL 读取 PostgreSQL 连接地址，从 REDIS_URL 读取缓存和跨节点中继地址。"
-        "执行 cmd/migrate 后访问 /readyz，查看 checks.db 与 checks.migrations；若返回 503，先核对连接地址、网络连通性和迁移版本。"
-        "浏览器来源由 CORS_ALLOWED_ORIGINS 控制，未列入的来源会在预检阶段被拒绝。"
-        "会话或 JWT 密钥、运行时令牌及 Webhook 签名凭证从环境变量注入；启动日志和请求日志不得输出凭证原文。"
-    )
+    return configured_text(project, "configuration_overview", "项目实际配置项和生效方式")
+
+
 def backend_project(project, spec=None):
     if project.get("document_kind") in {"backend", "api", "server"}:
         return True
@@ -824,7 +728,7 @@ def manual(project, cfg, spec=None, shots=None):
     {configured_text(project, "scope", "软件负责的业务范围和不负责的边界")}
 
     ## 1.4 核心特性
-    {module_table}
+    {"" if project.get("omit_core_features") else configured_text(project, "core_features_text", "") or module_table}
 
     ## 1.5 适用范围
     {table(configured_rows(project, "scenarios", ["范围", "实际使用说明"], "实际使用范围"), ["范围", "实际使用说明"])}
@@ -838,7 +742,7 @@ def manual(project, cfg, spec=None, shots=None):
     {configured_text(project, "architecture_overview", "源码中的实际架构和调用关系")}
 
     ## 2.2 分层架构
-    {table(configured_rows(project, "architecture_layers", ["层级", "源码证据和职责"], "实际架构层级"), ["层级", "源码证据和职责"])}
+    {configured_text(project, "architecture_layers_text", "") or table(configured_rows(project, "architecture_layers", ["层级", "源码证据和职责"], "实际架构层级"), ["层级", "源码证据和职责"])}
 
     ## 2.3 关键模块架构
     {configured_text(project, "module_architecture", "")}
@@ -882,17 +786,17 @@ def manual(project, cfg, spec=None, shots=None):
     # 使用指南
 
     ## 6.1 快速上手
-    {numbered_steps(project, "quick_start", "从真实入口开始的操作步骤")}
+    {"" if project.get("omit_quick_start") else numbered_steps(project, "quick_start", "从真实入口开始的操作步骤")}
 
     ## 6.2 常用操作
-    {table(configured_rows(project, "operations", ["操作", "实际步骤", "实际结果"], "实际操作记录"), ["操作", "实际步骤", "实际结果"])}
+    {configured_text(project, "operations_text", "") or table(configured_rows(project, "operations", ["操作", "实际步骤", "实际结果"], "实际操作记录"), ["操作", "实际步骤", "实际结果"])}
 
     # 功能模块
 
     ## 7.1 模块一览
-    {module_table}
+    {configured_text(project, "module_overview", "") or module_table}
 
-    {module_sections(project, spec, shots, used)}
+    {configured_text(project, "module_manual", "") or module_sections(project, spec, shots, used)}
 
     # 运维管理
 
@@ -944,17 +848,43 @@ def rest_api_section(project, spec=None):
             return empty
         return table(rows, ["字段", "类型", "说明"])
 
+    compact = project.get("api_reference_style") == "compact"
+    common_auth = str(project.get("api_common_auth") or "").strip()
+    common_status = project.get("api_common_status") or []
+    shared_rules = str(project.get("api_shared_rules") or "").strip()
     out = [
         "## 10.2 核心 REST API 数据结构",
         "",
-        "先用 GET /health 和 GET /readyz 判断服务是否可用，再按需要查看 /api/me、/api/workspaces 和 /api/issues。下列字段来自配置中登记的请求与响应结构；示例值只表示类型，不对应真实用户。",
+        "以下列出当前版本的接口字段；调用时按各接口的请求约束填写，并核对返回状态。",
         "",
     ]
+    if compact and shared_rules:
+        out += [shared_rules, ""]
     for index, item in enumerate(examples, 1):
         method = str(item.get("method", "")).upper()
         path = str(item.get("path", "")).strip()
         title = str(item.get("title", "")).strip()
         out.append(f"### API-{index} {method} {path}")
+        if compact:
+            if item.get("scenario"):
+                out += ["", str(item["scenario"]).strip()]
+            elif title:
+                out += ["", title + "。"]
+            auth = str(item.get("auth") or "").strip()
+            if auth and auth != common_auth:
+                out += ["", "访问限制：" + auth]
+            rows = [["请求", *row] for row in item.get("request_fields", [])]
+            rows += [["响应", *row] for row in item.get("response_fields", [])]
+            if rows:
+                out += ["", table(rows, ["方向", "字段", "类型", "说明"]), ""]
+            else:
+                out += ["", "无请求体，响应不含 JSON 字段。", ""]
+            status = item.get("status_codes") or []
+            if status and status != common_status:
+                out += ["特定状态", "", table(status, ["状态码", "含义"]), ""]
+            if item.get("notes"):
+                out += [str(item["notes"]).strip(), ""]
+            continue
         if title:
             out += ["", f"用途：{title}"]
         if item.get("auth"):
@@ -969,7 +899,7 @@ def rest_api_section(project, spec=None):
         out += [
             "### 接口目录（按业务分组）",
             "",
-            "需要查路由时先按业务分组找方法和路径，例如服务状态从 /health 开始，运行时从 /api/daemon/register 开始。目录不表示接口允许匿名访问；请求体和权限仍以对应入口的校验结果为准。",
+            f"下表按业务列出 {len(catalog)} 组接口。需要具体字段时，查上面的 API 数据结构，并以服务返回的 HTTP 状态核对调用结果。",
             "",
             table(catalog, ["业务分组", "方法", "路径", "用途"]),
             "",
@@ -1096,10 +1026,18 @@ def run_initial_aigc(root, projects):
             raise RuntimeError(f"AIGC 初稿检查失败：{material_dir}")
 
 
-def spec_lines(spec):
+def spec_lines(spec, project=None):
     if not spec:
         return ""
+    if project and project.get("source_count_mode") == "source_files":
+        from application_form import source_line_count
+        count = source_line_count(project, spec)
+        return f"{count} 行（{len(project.get('source_files') or [])} 个源文件，按本次申报清单逐文件统计）。"
     st = spec["stats"]
+    note = str(st.get("note") or "")
+    if "仅" in note and "上游" in note:
+        return (f"{st['source_lines']} 行（{st['source_files']} 个源文件，限定为本次申报功能范围）。"
+                "全仓代码包含上游文件，不纳入本次自有源码统计。")
     return (f"{st['source_lines']} 行（{st['source_files']} 个源文件，manual_spec.py 统计）。"
             "申请表“源程序量”填全部源码行数，不是 60 页取材的行数。")
 
@@ -1118,8 +1056,8 @@ def application_copy(project, cfg, spec=None):
         ("著作权人", configured_fact(cfg.get("copyright_holder", ""))),
         ("开发完成日期", configured_fact(cfg.get("development_completed_date", ""))),
         ("首次发表日期", configured_fact(cfg.get("first_publication_date", "未发表")) or "未发表"),
-        ("权利取得方式", configured_fact(cfg.get("acquire_type", "原始取得")) or "原始取得"),
-        ("开发方式", configured_fact(cfg.get("develop_type", "独立开发")) or "独立开发"),
+        ("权利取得方式", configured_fact(cfg.get("acquire_type", ""))),
+        ("开发方式", configured_fact(cfg.get("develop_type", ""))),
     ]
     out = [f"# {project['name']} {project.get('version', 'V1.0')} 申请表填报文案", "",
            "| 项目 | 建议填写 |", "| --- | --- |"]
@@ -1127,7 +1065,7 @@ def application_copy(project, cfg, spec=None):
     sections = [
         # 与 application_form.py 同源：优先正式的 main_function（500–1300 字），没有时才用概述
         ("软件主要功能", configured_text(project, "main_function", "") or configured_text(project, "summary", "")),
-        ("源程序量", spec_lines(spec)),
+        ("源程序量", spec_lines(spec, project)),
         ("开发工具", str(env.get("dev_tools", "")).strip()),
         ("技术特点", configured_text(project, "tech_feature_text", "")),
     ]

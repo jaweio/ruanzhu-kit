@@ -37,9 +37,13 @@ def match_module(name, modules):
     return ""
 
 
-def shot_title(stem, mod):
+def shot_title(stem, mod, evidence_id=""):
     """图题：模块名 + 文件名里“-”后面的子标题，如“经典房记账（记录支出）”，同一模块多张图不再同名。"""
     plain = re.sub(r"^[\d\-_.\s]+", "", stem)
+    if evidence_id and not mod:
+        evidence_title = re.sub(rf"^{re.escape(evidence_id)}[_-]*", "", plain, flags=re.IGNORECASE).strip()
+        if evidence_title:
+            return evidence_title
     sub = plain.split("-", 1)[1].strip() if "-" in plain else ""
     base = mod or plain
     return f"{base}（{sub}）" if sub and sub != base else base
@@ -126,7 +130,7 @@ def validate_manifest(root, spec_path=None):
         module = str(item.get("module", "")).strip()
         if module:
             modules_in_items.add(module)
-        else:
+        elif not str(item.get("evidence_id", "")).strip():
             report["unmatched_items"].append(str(item.get("no", file_name)))
     modules = load_modules(spec_path)
     report["missing_modules"] = [module for module in modules if module not in modules_in_items]
@@ -174,13 +178,13 @@ def main():
         out_name = f"{args.prefix}-{i}{('_' + mod) if mod else ''}{p.suffix.lower()}"
         shutil.copy2(p, dst / out_name)
         item = {"no": f"图 {args.prefix}-{i}", "file": f"截图/{out_name}",
-                "module": mod, "title": shot_title(p.stem, mod), "source": str(p.name)}
+                "module": mod, "title": shot_title(p.stem, mod, evidence_id), "source": str(p.name)}
         if evidence_id:
             item["evidence_id"] = evidence_id
         items.append(item)
 
     (root / "截图清单.json").write_text(json.dumps(
-        {"count": len(items), "unmatched": [i["no"] for i in items if not i["module"]], "items": items},
+        {"count": len(items), "unmatched": [i["no"] for i in items if not i["module"] and not i.get("evidence_id")], "items": items},
         ensure_ascii=False, indent=2), encoding="utf-8")
 
     if not images:
@@ -188,7 +192,7 @@ def main():
         print("放图方式：①自己截图放进该目录；②Web 项目可让 Claude 用内置浏览器逐页截图另存到该目录。")
     else:
         print(f"整理 {len(items)} 张截图 → {dst}")
-        unmatched = [i["no"] for i in items if not i["module"]]
+        unmatched = [i["no"] for i in items if not i["module"] and not i.get("evidence_id")]
         if unmatched:
             print(f"未对上模块的截图：{'、'.join(unmatched)}（在文件名里加模块名，或手工改 截图清单.json 的 module 字段）")
     print(root / "截图清单.json")

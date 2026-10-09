@@ -78,6 +78,9 @@ def check(*, include_browser=False, config_path=None):
     add("pdf-reader", pdf_reader, True,
         "pypdf" if _module("pypdf") else ("pdftotext" if shutil.which("pdftotext") else "未找到 pypdf 或 pdftotext"),
         "python -m pip install -r requirements.txt，或安装 Poppler")
+    add("pymupdf", _module("pymupdf"), True,
+        "已安装" if _module("pymupdf") else "未安装（说明书页眉和半页密度校验需要）",
+        "python -m pip install -r requirements.txt")
     photo_pdf = _module("PIL") and _module("reportlab")
     add("photo-to-a4-pdf", photo_pdf, False,
         "Pillow + ReportLab 已安装" if photo_pdf else "未安装 Pillow 或 ReportLab",

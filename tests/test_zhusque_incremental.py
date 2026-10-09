@@ -11,6 +11,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pymupdf
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import artifact_manifest
 import zhusque_check as z
@@ -164,6 +166,30 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.run_check(), 2)
         self.assertEqual(self.state()["stats"]["blocked"], "source_changed_during_detection")
         self.assertFalse(artifact_manifest._zhusque_status(self.root)["checked"])
+
+    def test_pdf_header_change_invalidates_previous_coverage(self):
+        final = self.root / "提交材料"
+        final.mkdir()
+        pdf = final / "Example-软件说明.pdf"
+
+        def make_pdf(number_x):
+            document = pymupdf.open()
+            page = document.new_page()
+            page.insert_text((60, 30), "Example V1.0", fontsize=9)
+            page.insert_text((number_x, 30), "1", fontsize=9)
+            page.insert_text((60, 80), "Document body", fontsize=12)
+            document.save(pdf)
+            document.close()
+
+        make_pdf(530)
+        self.assertEqual(self.run_check(), 0)
+        self.assertTrue(artifact_manifest._zhusque_status(self.root)["checked"])
+        first_calls = self.api.call_count
+        pdf.unlink()
+        make_pdf(180)
+        self.assertFalse(artifact_manifest._zhusque_status(self.root)["checked"])
+        self.assertEqual(self.run_check(), 0)
+        self.assertGreater(self.api.call_count, first_calls)
 
     def test_no_key_auto_and_failed_api_both_fall_back_to_web(self):
         import zhusque_browser

@@ -25,7 +25,7 @@ INVISIBLE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
 
 
 def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=True,
-               trim_imports=True, max_blank_lines=1):
+               trim_imports=True, max_blank_lines=1, licensed_files=()):
     """读取取材文件：只裁剪输出材料，不改写源文件。
 
     返回 ``(lines, missing, skipped, stats)``，与历史 generate_source_docx API 兼容。
@@ -34,6 +34,7 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
     stats = {"headers": 0, "dropped": 0, "comments": 0, "imports": 0, "blank_lines": 0,
              "signatures": 0, "encoding_skipped": 0, "duplicates": 0}
     seen = {}
+    licensed_files = set(licensed_files)
     for rel in files:
         p = repo / rel
         if not p.is_file():
@@ -54,24 +55,31 @@ def read_lines(repo, files, redact=True, tokens=(), scrub=True, trim_comments=Tr
             stats["duplicates"] += 1
             continue
         seen.setdefault(fingerprint, rel)
+        licensed = rel in licensed_files
         reasons = third_party_reasons(rel, text, tokens)
         foreign = [who for who in _copyright_owners(text) if not is_own(who, tokens)]
-        if not reasons and foreign:
+        if licensed:
+            # The caller supplied a license record for this exact file. Preserve
+            # attribution, but continue rejecting generated/non-source material.
+            reasons = [reason for reason in reasons if not reason.startswith(
+                ("他人版权声明：", "开源脚手架代码："))]
+        if not licensed and not reasons and foreign:
             # 文件开头之外出现的他人版权声明同样说明是第三方代码
             reasons = ["他人版权声明：" + foreign[0][:40]]
         if reasons:
             skipped.append((rel, "；".join(reasons)))
             continue
-        if scrub:
+        if scrub and not licensed:
             file_lines, scrub_stats = scrub_code(text, tokens)
             stats["headers"] += scrub_stats["header"]
             stats["dropped"] += scrub_stats["dropped"]
         else:
             file_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         # 署名清理不依赖 trim_comments：保留注释时也不能留下个人签名和版权声明
-        file_lines, removed = strip_signatures(file_lines)
-        stats["signatures"] += removed
-        if trim_comments:
+        if not licensed:
+            file_lines, removed = strip_signatures(file_lines)
+            stats["signatures"] += removed
+        if trim_comments and not licensed:
             file_lines, removed = strip_comments(file_lines, rel)
             stats["comments"] += removed
         if trim_imports:
@@ -242,9 +250,19 @@ def collect_source_material(repo, project, tokens=(), cli_keep_comments=False,
     if cli_keep_imports:
         trim_imports = False
     max_blank_lines = max(0, min(int(source_material.get("max_blank_lines", 0)), 3))
+    licensed_files = source_material.get("licensed_source_files", []) or []
+    if licensed_files:
+        if (not isinstance(licensed_files, list)
+                or len(licensed_files) != len(set(licensed_files))
+                or not set(licensed_files).issubset(source_files)):
+            raise SourceValidationError("licensed_source_files 必须是 source_files 中不重复的路径")
+        evidence = source_material.get("license_evidence", "")
+        if not isinstance(evidence, str) or not evidence.strip() or not (repo / evidence).is_file():
+            raise SourceValidationError("包含许可源码时必须提供可读取的 license_evidence")
     lines, missing, skipped, stats = read_lines(
         repo, source_files, project.get("redact", True), tokens,
         project.get("scrub_open_source", True), trim_comments, trim_imports, max_blank_lines,
+        licensed_files,
     )
     if missing:
         raise SourceValidationError(

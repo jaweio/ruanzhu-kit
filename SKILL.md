@@ -1,6 +1,6 @@
 ---
 name: ruanzhu-kit
-description: 软著工具箱。Use when Codex or Claude needs to analyze a software project and generate reusable Chinese software copyright registration materials, including project splitting, naming, application-form copy, software manuals with clickable table of contents, source-code DOCX/PDF extracts, photographed paper materials rectified into A4 PDFs, validation records, copyright-risk checks and removal of all repository/open-source traces (GitHub/Gitee URLs, license headers, badges; third-party code auto-excluded), AIGC (AI-generated text) style detection and removal for manuals and application copy, and packaged deliverables based on a configurable workflow. When the user only has a requirement (e.g. "a game box app") and no code yet, first builds a real runnable uni-app project from a confirmed product spec and gates it with spec_gate.py (Step 0) before generating materials; never fabricates materials for software that does not exist. Also covers auto-filling the R11 form on register.ccopyright.com.cn by driving the user's already logged-in Chrome through the browser extension (or computer-use); it stops at saving a draft and never submits.
+description: 软著工具箱。Use when the user asks to 生成或整理软著材料、软件著作权登记 (Chinese software copyright registration): analyze a software project and generate reusable registration materials — project splitting and naming, application-form copy, software manuals with clickable TOC, source-code DOCX/PDF extracts, photographed paper materials rectified into A4 PDFs, validation records, copyright-risk cleanup (remove GitHub/Gitee URLs, license headers, badges; third-party code auto-excluded), AIGC style detection and removal, and packaged deliverables. If the user only has a requirement and no code yet, first build a real runnable uni-app project gated by spec_gate.py (Step 0); never fabricate materials for software that does not exist. Also auto-fills the R11 form on register.ccopyright.com.cn by driving the user's logged-in Chrome (extension or computer-use); stops at saving a draft, never submits.
 ---
 
 # 软著工具箱
@@ -102,7 +102,7 @@ python3 scripts/manual_spec.py --repo <项目目录> \
 ```
 
 产出 `说明书素材.json` 和 `说明书素材预览.md`，每个页面含：模块名（取自界面标题文字）、进入位置（路由/目录）、
-界面控件文字、取值约束、提示语、错误码、源码文件与行数；同时统计全项目源码行数（申请表“源程序量”用它）。
+界面控件文字、取值约束、提示语、错误码、源码文件与行数；默认统计扫描范围源码行数。继承仓库含上游代码时，申请表“源程序量”应改按已核定的自有文件清单逐文件统计。
 
 如果扫描到后端接口，素材 JSON 还会给出 `backend`、`apis` 和 `evidence_plan`。接口路径、方法、文件和行号只从源码抽取；抽不到的事实不补写。后端说明书的证据计划默认包含三类必需真实材料：成功响应、参数校验/4xx 错误响应、启动或业务日志；只有检测到项目实际启用 Knife4j/OpenAPI 时，调试页才会标为必需。
 
@@ -229,6 +229,7 @@ python3 scripts/create_config.py --project-name "MyProject" \
 | `projects[].short_name` | 软件简称和交付文件名前缀 |
 | `projects[].artifact_label` | 端类型标签，如后端、桌面端、移动端、小程序；用于证据规则和上传文件名 |
 | `projects[].source_files` | 该软著专属源文件列表（不与其他软著共享） |
+| `projects[].source_count_mode` | 仅当继承仓库含上游代码、且 `source_files` 已列全本次自有程序范围时设为 `source_files`；登记表逐文件统计原始物理行数（可含自有测试文件），不使用裁剪后的 PDF 行数，也不计入上游代码 |
 | `projects[].source_map` | 内部取材映射，只写入 `源码材料清单.md` 和检查报告，不显示在软件说明书正文 |
 | `projects[].modules` | 功能模块 `[["模块名", "说明"]]`（只写本软著的功能） |
 | `projects[].extra_chapters` | 复杂项目的扩展章节；默认空数组，按实际功能增加 |
@@ -416,6 +417,8 @@ python3 scripts/capture.py --target mac --app 微信开发者工具 --name 房�
 
 `screenshots.py` 只整理、编号、对号，不生成图片；对不上模块的截图会提示，改文件名或手工改清单的 `module` 字段即可。截图前必须优先使用 4.0 生成并创建项目相关数据，禁止用“测试用户”“示例订单”等无业务含义文本代替。
 
+后端/API 工程没有页面模块时，真实成功响应、4xx 错误响应和启动日志截图的文件名分别包含 `api-success`、`api-error`、`runtime-log`；`screenshots.py` 会按 `evidence_plan` 写入 `evidence_id`，这类条目的 `module` 可以为空。裁切用于去掉空白或无关窗口区域时保留完整原图与原始 HTTP 响应、状态码或日志，说明书需明确浏览器或开发者工具只是查看接口结果的工具。
+
 整理完成后可单独校验材料完整性（不启动浏览器、不生成图片）：
 
 ```bash
@@ -574,7 +577,7 @@ python3 <skill目录>/scripts/zhusque_check.py finalize <材料目录> \
 
 目录模式检测当前说明书、申请表文案、填表配置中的长文本及材料清单指定的文档 PDF；不递归检测章节副本、程序源码 PDF、旧版目录、截图证据计划或内部报告。重复的完全相同单元按指纹合并；Markdown 与 PDF 提取文本有格式差异时不承诺全部复用。缓存位于用户缓存目录（macOS 默认 `~/Library/Caches/ruanzhu-kit/zhusque`），不保存原文和 Key。
 
-`朱雀检测报告.md` 汇总当前完整正文对应的历史有效结果与本轮新结果，按检测单元字符数加权；它不是“本轮重新请求了全文”。报告区分缓存、本轮请求、API/网页来源，并记录 API 实际返回的 Makers 用量；网页没有 API Token 用量，不应把网页检测数当作控制台 API 调用数。只有覆盖完整且 AI＋疑似比例 ≤ `--max-risk-ratio` 才写完成标记，默认 0.20 是项目复核规则，不是腾讯或登记机构标准。
+`朱雀检测报告.md` 汇总当前完整正文对应的历史有效结果与本轮新结果，按检测单元字符数加权；它不是“本轮重新请求了全文”。报告区分缓存、本轮请求、API/网页来源，并记录 API 实际返回的 Makers 用量；网页没有 API Token 用量，不应把网页检测数当作控制台 API 调用数。说明书 PDF 的检测输入仅在逐页核对左上角的软件全称与版本、右上角连续纯数字页码的实际坐标和提取文本一致后，排除重复的运行页眉；任一页不符则保留原文并使变更后的检测指纹重新核验，封面标题、目录和正文仍参与检测。只有覆盖完整且 AI＋疑似比例 ≤ `--max-risk-ratio` 才写完成标记，默认 0.20 是项目复核规则，不是腾讯或登记机构标准。
 
 `朱雀改写任务单.md` 只列 AI/疑似单元及可用的段内原文位置。当前 agent 根据源码、真实界面和操作记录修改，不能编造事实，也不能保证改写必定降低检测比例。说明书以 `软件说明书.md` 为主版本，由 agent 同步受影响章节、重新生成已有 PDF，再运行增量复检；不另存脱离正式产物的“优化版”作为完成依据。
 
@@ -683,15 +686,19 @@ python3 scripts/artifact_manifest.py \
 | 软件全称/简称/版本/分类 | `ruanzhu.config.json` 的 `projects[]` |
 | 开发完成日期/发表状态 | 配置顶层；发表状态固定“未发表” |
 | 著作权人 | 版权中心登录账户带入；填表后回读核对，配置中可不填 |
-| 源程序量 | `说明书素材.json` 的全项目源码行数（不是取材行数） |
+| 源程序量 | 本次申报软件范围内的原始源码行数；纯自有项目可用 `说明书素材.json`，含上游代码时用 `source_count_mode: source_files` |
 | 编程语言 | 素材里的 by_ext 行数统计，按行数排序 |
-| 开发/运行环境 | 优先从 `projects[].environment_profile` 结构化生成六项登记表字段，再兼容 `env` 文本覆盖；`dev_tools` 可读取项目构建清单，运行支撑可结合 `tech_stack`；硬件与实际使用的操作系统必须来自已核实配置，缺失时留空并提示，不推测 |
+| 开发/运行环境 | 优先从 `projects[].environment_profile` 结构化生成六项登记表字段，再兼容 `env` 文本覆盖；`dev_tools` 可读取项目构建清单，运行支撑可结合 `tech_stack`；硬件和目标操作系统应写软件所需或建议的通用配置，须有项目与运行时支持依据；本机核验配置另放运行记录，缺失时留空并提示 |
 | 软件主要功能 | 说明书“功能模块”章节按模块拼 500–1300 字初稿 |
 | 两份 PDF | 材料目录里实际存在的文件，路径自动填 |
 
 校验项：必填字段为空（登录账户带入的著作权人除外，缺失一律留空，不写占位文字）、残留占位文字、各字段长度上限、主要功能 500–1300 字、日期格式、PDF 是否存在、软件全称与说明书是否一致、源程序量与素材是否一致。著作权人由页面回读核对，不要求在本地配置重复填写。
 
-`projects[].environment_profile` 按登记表模板拆分开发/运行两组信息：`hardware` 填 CPU、内存、可用磁盘和网络建议；`operating_systems` 填已核实的系统；`tools` 填开发工具；`support_software` 与 `deployment` 填运行依赖和部署方式。工具会把结构化配置生成到 `step3_dev`、申请表文案和说明书环境章节，并在 `_environmentSources` 留下字段来源。硬件要求及实际使用过的开发系统不能仅凭源码推断；无资料时由项目负责人确认后再填。模板文档中的其他软件栈不会复制进新项目。
+`projects[].environment_profile` 按登记表模板拆分开发/运行两组信息：`hardware` 填 CPU、内存、可用磁盘和网络建议；`operating_systems` 填软件适用的目标系统；`tools` 填开发工具；`support_software` 以基础运行依赖为主。本次软件若包含需要额外组件的可选业务示例，可在 50 字限额内明确标为“按需”，并在说明书写清适用模块；不得写成所有功能启动必需。`deployment` 可记录部署方式，但不会拼入登记表“运行支撑环境”。工具会把结构化配置生成到 `step3_dev`、申请表文案和说明书环境章节，并在 `_environmentSources` 留下字段来源。说明书须分别列出开发硬件环境、运行硬件环境、开发操作系统、开发工具、运行操作系统、运行支撑环境六项；生成 PDF 后运行 `artifact_manifest.py --verify`，逐项核对原配置、表单 JSON、填报文案、说明书 Markdown 和 PDF 正文，发现旧 PDF 或旧表单即停止上传。硬件建议与目标系统须结合构建配置、运行时发行版支持和项目部署方式核定；无依据时留空并列出待核问题。模板文档中的其他软件栈不会复制进新项目。
+
+登记表的开发与运行硬件、操作系统、工具和运行支撑应描述软件所需或建议的通用配置，不得把本机核验设备型号、补丁版本和操作系统直接当成任一栏的通用条件。本机实际信息保留在内部运行验证记录；说明书的“环境要求”只写通用配置，未验证的平台不得写成已测试。运行支撑应区分启动必需与可选子模块依赖；可选模型服务等外部连接另列可选功能，不并入基础运行依赖。源程序量若启用 `source_count_mode: source_files`，须先完成权属排查，确保清单覆盖本次申报的自有主程序及自有测试文件，再与源码 PDF 的文件范围核对。
+
+运行平台与运行支撑两栏都须写出可操作的条件：平台列系统家族或适用发行版、位数及运行时兼容条件；支撑列语言运行时、随部署包提供的 Web 容器或框架及必需网络/数据库等依赖。只列该申报功能实际需要的组件，不能把参考项目的 MySQL、Redis 等照搬过来。R11 这两栏各限 50 字，完整的架构、可选外部服务和核验步骤写在说明书环境章节；从项目依赖与构建包核对容器版本后再填，不凭框架名称推断。
 
 ### 8.2 表单数据结构（auto-fill/config.json，由上一步生成）
 
@@ -865,7 +872,7 @@ python3 scripts/dashboard.py --config soft-copyright-materials/ruanzhu.config.js
 每份软著输出（存放在各自目录下）：
 
 1. `软件说明书.md`（正文来源）
-2. `<简称>-<端类型>软件说明.pdf`（提交件，默认采用参考样式的编号目录、章节编号和右上角阿拉伯数字页码；无页头；由 md 渲染，不经 docx）
+2. `<简称>-<端类型>软件说明.pdf`（提交件，封面注明软件全称与版本号，默认采用参考样式的编号目录、章节编号；每页左上角标注软件全称与版本号，右上角只标注阿拉伯数字页码；由 md 渲染，不经 docx）
 3. `申请表填报文案.md`（application_form.py 生成，与填表配置同源）
 4. `源码材料清单.md`
 5. `截图清单.json` + `截图/`（有截图时）
@@ -892,7 +899,9 @@ python3 scripts/dashboard.py --config soft-copyright-materials/ruanzhu.config.js
 
 ## 说明书章节标准（默认 10 章，可按场景扩展）
 
-0. 默认采用 10 章基础结构；复杂项目可在 `projects[].extra_chapters` 中追加数据治理、接口管理、权限审计、任务调度、算法流程等真实章节，简单项目不必为了凑章数扩写。说明书 PDF 默认采用参考样式：简洁编号目录、`01-章节名` 单一章节标签、右上角阿拉伯数字页码；正文不重复显示“软件全称 - 章节名”副标题，目录和正文标题不添加装饰性圆点，不添加页头和页脚。可通过 `render_pdfs.py --style clean` 切换为简洁样式（render_pdfs.py 自动处理）
+0. 默认采用 10 章基础结构；复杂项目可在 `projects[].extra_chapters` 中追加数据治理、接口管理、权限审计、任务调度、算法流程等真实章节，简单项目不必为了凑章数扩写。扩展章节须说明软件实际功能、操作流程或可核验的运行结果；“人工复核与功能限制”一类泛化风险提示若已在使用指南、功能模块或常见问题中交代，不单独成章，也不重复扩写凑页数。说明书 PDF 默认采用参考样式：简洁编号目录、`01-章节名` 单一章节标签、每页左上角“软件全称 + 版本号”，右上角只有阿拉伯数字页码；正文不重复显示“软件全称 - 章节名”副标题，目录和正文标题不添加装饰性圆点。章节默认随正文顺排，可用 `projects[].chapter_page_breaks` 列出确需另起页的章名；除最后一页外，逐页正文及图片的纵向跨度至少占可用高度的一半，封面同样校验；末页不足可用高度的 20% 时按孤页处理，不用空白或重复段落凑页数。`render_pdfs.py` 在临时 PDF 校验页眉和密度后才替换正式提交件；`artifact_manifest.py --verify` 上传核对时会再次检查该版式。可用 `--style clean` 切换简洁样式。
+   原始 HTTP 响应、完整 JSON、测试日志和异常堆栈保存在内部运行验证目录；说明书只摘取能帮助安装、操作或排错的输入、结果与状态码。已有“部署后验证”和“功能模块”章节覆盖的事实，不再另设“运行与核验记录”章节重复展开。
+   后端接口的 `path` 若是调用方提交的虚拟文件标识，确需在说明书请求示例中原样显示时，在配置正文写 `{{virtual-path:src/Order.java}}`。生成器只对明确标记且不含父目录片段的相对路径保留原值；未标记的内部源码路径仍按版权材料规则隐藏。标记只用于有真实输入依据的虚拟路径，不用于服务器磁盘路径。
 1. 软件概述（定位、目标、特性、适用角色；源码范围只保留在内部材料清单，不写入说明书正文；申请人信息和发表信息不写入说明书）
 2. 软件架构（架构图、分层说明、技术选型）
 3. 环境要求（开发环境、运行环境、第三方依赖）
@@ -934,8 +943,9 @@ python3 scripts/dashboard.py --config soft-copyright-materials/ruanzhu.config.js
 - 不伪造著作权人、开发完成日期、统一社会信用代码等主体信息；著作权人以版权中心登录账户为准，工具只回读核对
 - 不在材料中泄露 API Key、Token、手机号、私有服务器地址（源程序提取默认脱敏，Step 5 会复查）
 - 不申报他人作品：第三方库、开源项目代码、脚手架原有代码不得作为源程序材料，也不得删除其许可证/版权声明后使用
+- 用户明确要求将有许可证授权的既有脚手架纳入改编软件的工程范围时，先区分工程总量与新增原创量，核验许可证及上游来源。仅在申请人确有覆盖复制、修改和提交材料的授权时，才可在 `source_material.licensed_source_files` 逐文件列明例外，并设置可读取的 `source_material.license_evidence`。该路径不自动证明权属；提取器保留这些文件的版权与作者注释，禁止以包名迁移或注释改名冒称自有原创。申请表取得方式及许可证明仍须按实际情况核对，材料不得隐藏该来源。
 - 所有申报材料一律不出现开源协议、仓库地址和引用来源（自有开源项目由 Step 5 工具清除，业务用语不动）；发表状态一律按“未发表”，源程序取自上架版本
-- 申请表“源程序量”填**全项目源码总行数**（`manual_spec.py` 统计），不是 60 页取材的行数
+- 申请表“源程序量”填本次申报软件范围内的原始源码总行数，不是 PDF 裁剪行数。独立自有项目可用 `manual_spec.py` 全项目统计；继承仓库含上游代码时先核定自有文件清单，再用 `source_count_mode: source_files` 逐文件统计，不能把上游代码算入
 - 申请表“开发工具”填 IDE、编译器、构建工具等实际工具，不要填 React、Vue 这类技术栈名称
 - 多份软著的开发完成日期可选择不同工作日（相差 1-3 天）
 - 说明书内容必须与项目源码和实际功能一致；AIGC 去痕改写同样不得虚构功能、文件或数据

@@ -97,6 +97,15 @@ class AIComplianceTests(unittest.TestCase):
         self.project["copyright_holder"] = "乙方"
         self.assertEqual(paragraphs(self.cfg, self.project, options(self.cfg, self.project))[0]["p07"], "著作权人：乙方")
 
+    def test_project_specific_fact_paragraphs(self):
+        self.project["ai_compliance"] = {"paragraphs": {"p10": "模型地址未配置时，生成请求返回503。"}}
+        text, _ = paragraphs(self.cfg, self.project, options(self.cfg, self.project))
+        self.assertEqual(text["p10"], "模型地址未配置时，生成请求返回503。")
+        self.assertIn(self.project["name"], text["p05"])
+        self.project["ai_compliance"]["paragraphs"] = {"p05": "错误覆盖"}
+        with self.assertRaises(ValueError):
+            paragraphs(self.cfg, self.project, options(self.cfg, self.project))
+
     def test_dates_are_explicit_not_today_or_completion_date(self):
         self.cfg["development_completed_date"] = "2026-09-22"
         self.assertNotIn("2026", paragraphs(self.cfg, self.project, options(self.cfg, self.project))[0]["date"])
@@ -173,6 +182,14 @@ class AIComplianceTests(unittest.TestCase):
         command = [sys.executable, "-c",
                    "import pathlib,sys,time;pathlib.Path(sys.argv[1]).write_bytes(b'%PDF-1.4\\n%%EOF');time.sleep(60)", str(target)]
         print_pdf(command, target)
+        self.assertTrue(target.read_bytes().endswith(b"%%EOF"))
+
+    def test_printer_keeps_completed_pdf_when_process_group_signal_is_denied(self):
+        target = self.root / "permission-denied.pdf"
+        command = [sys.executable, "-c",
+                   "import pathlib,sys,time;pathlib.Path(sys.argv[1]).write_bytes(b'%PDF-1.4\\n%%EOF');time.sleep(60)", str(target)]
+        with patch("ai_compliance.os.killpg", side_effect=PermissionError("not permitted")):
+            print_pdf(command, target)
         self.assertTrue(target.read_bytes().endswith(b"%%EOF"))
 
     def test_printer_exit_without_pdf_is_an_error(self):

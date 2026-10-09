@@ -1,9 +1,10 @@
 """Resolve the six registration-form development/runtime environment fields.
 
-Structured ``environment_profile`` entries are preferred because they keep
-machine facts separate from prose. Legacy ``env`` strings remain supported as
-overrides. Values that cannot be established from the project (especially
-hardware and the OS actually used during development) are never fabricated.
+Structured ``environment_profile`` entries describe the software's development
+and deployment requirements, not the agent's current workstation. Legacy
+``env`` strings remain supported as overrides. Recommended hardware and target
+operating systems require a project-specific basis; verification host details
+belong in separate run records.
 """
 
 from pathlib import Path
@@ -107,10 +108,6 @@ def resolve_environment(project, cfg=None, spec=None):
         if section in profile and name in profile[section]:
             raw = profile[section][name]
             value = _hardware(raw) if name == "hardware" else _items(raw)
-            if key == "run_support" and isinstance(profile.get("runtime", {}).get("deployment"), list):
-                deploy = _items(profile["runtime"]["deployment"])
-                if deploy:
-                    value = "、".join(x for x in (value, deploy) if x)
             if value:
                 sources[key] = f"projects[].environment_profile.{section}.{name}"
         if not value:

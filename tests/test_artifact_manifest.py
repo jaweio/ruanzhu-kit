@@ -5,12 +5,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pymupdf
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from artifact_manifest import (build_manifest, formal_material_paths,
-                               verify_records)  # noqa: E402
+                               verify_environment_consistency, verify_records)  # noqa: E402
 from output_names import manual_pdf_name, source_material_pdf_name, submission_dir  # noqa: E402
 import zhusque_check  # noqa: E402
 
@@ -46,6 +47,58 @@ def write_pdf(path, page_texts):
 
 
 class ArtifactManifestTests(unittest.TestCase):
+    def test_environment_consistency_accepts_matching_form_manual_and_pdf(self):
+        values = {
+            "devHardware": "建议4核CPU、16GB内存", "runHardware": "建议4核CPU、8GB内存",
+            "devOS": "Linux、Windows（64位）", "devTools": "JDK 25、Git",
+            "runOS": "Linux、Windows（64位）", "runSupport": "Java 25、Tomcat 11",
+        }
+        labels = {
+            "devHardware": "开发硬件环境", "runHardware": "运行硬件环境",
+            "devOS": "开发操作系统", "devTools": "开发工具",
+            "runOS": "运行操作系统", "runSupport": "运行支撑环境",
+        }
+        rows = "\n".join(f"| {labels[key]} | {value} |" for key, value in values.items())
+        with tempfile.TemporaryDirectory() as td:
+            project_dir = Path(td)
+            (project_dir / "软件说明书.md").write_text(rows, encoding="utf-8")
+            (project_dir / "申请表填报文案.md").write_text(rows, encoding="utf-8")
+            pdf = project_dir / "说明书.pdf"
+            pdf.write_bytes(b"pdf fixture")
+            # Chromium/pypdf may insert spaces and normalize full-width punctuation.
+            pdf_text_value = rows.replace("（", "(").replace("）", ")")
+            with patch("artifact_manifest.pdf_text", return_value=pdf_text_value):
+                self.assertEqual(verify_environment_consistency(project_dir, values, pdf), [])
+
+    def test_environment_consistency_rejects_stale_pdf_and_form_copy(self):
+        values = {"devHardware": "建议4核CPU、16GB内存"}
+        with tempfile.TemporaryDirectory() as td:
+            project_dir = Path(td)
+            (project_dir / "软件说明书.md").write_text(
+                "| 开发硬件环境 | 建议4核CPU、16GB内存 |", encoding="utf-8")
+            (project_dir / "申请表填报文案.md").write_text(
+                "| 开发硬件环境 | Apple M4 Pro本机 |", encoding="utf-8")
+            pdf = project_dir / "说明书.pdf"
+            pdf.write_bytes(b"old pdf fixture")
+            with patch("artifact_manifest.pdf_text", return_value="开发硬件环境 Apple M4 Pro本机"):
+                errors = verify_environment_consistency(project_dir, values, pdf)
+            self.assertTrue(any("申请表填报文案.md 的开发硬件环境" in error for error in errors), errors)
+            self.assertTrue(any("说明书 PDF 的开发硬件环境" in error for error in errors), errors)
+
+    def test_environment_consistency_rejects_stale_form_after_config_change(self):
+        values = {"devHardware": "建议4核CPU、16GB内存"}
+        with tempfile.TemporaryDirectory() as td:
+            project_dir = Path(td)
+            row = "| 开发硬件环境 | 建议4核CPU、16GB内存 |"
+            (project_dir / "软件说明书.md").write_text(row, encoding="utf-8")
+            (project_dir / "申请表填报文案.md").write_text(row, encoding="utf-8")
+            pdf = project_dir / "说明书.pdf"
+            pdf.write_bytes(b"old pdf fixture")
+            configured = {"dev_hardware": "建议8核CPU、32GB内存"}
+            with patch("artifact_manifest.pdf_text", return_value=row):
+                errors = verify_environment_consistency(project_dir, values, pdf, configured)
+            self.assertTrue(any("与 ruanzhu.config.json 不一致" in error for error in errors), errors)
+
     def test_manifest_binds_endpoint_and_upload_roles(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -86,7 +139,8 @@ class ArtifactManifestTests(unittest.TestCase):
                 "max_chars": zhusque_check.DEFAULT_CHUNK_CHARS,
                 "risk_ratio": 0,
             }), encoding="utf-8")
-            manifest = build_manifest(Path(td) / "ruanzhu.config.json", {}, project, root)
+            with patch("render_pdfs.validate_manual_pdf_layout", return_value={"pages": 1}):
+                manifest = build_manifest(Path(td) / "ruanzhu.config.json", {}, project, root)
             self.assertEqual(manifest["materials"]["programPdf"]["filename"], "AI 协作-后端源码.pdf")
             self.assertEqual(manifest["materials"]["docPdf"]["filename"], "AI 协作-后端软件说明.pdf")
             self.assertEqual(manifest["materials"]["programPdf"]["path"],
@@ -240,6 +294,20 @@ class ArtifactManifestTests(unittest.TestCase):
         with patch("artifact_manifest.pdf_text", side_effect=ValueError("broken")):
             errors = verify_records(files, form, Path("a软件说明.pdf"))
         self.assertTrue(any("无法抽取文本" in e for e in errors))
+
+    def test_verify_rejects_manual_without_required_header(self):
+        with tempfile.TemporaryDirectory() as td:
+            pdf = Path(td) / "a软件说明.pdf"
+            document = pymupdf.open()
+            page = document.new_page()
+            page.insert_text((60, 30), "Example V1.0", fontsize=9)
+            page.insert_text((60, 80), "Real manual body", fontsize=12)
+            document.save(pdf)
+            document.close()
+            files, form = self._doc_files()
+            errors = verify_records(files, form, manual_pdf=pdf,
+                                    manual_identity=("Example", "V1.0"))
+            self.assertTrue(any("docPdf 页眉或正文密度校验失败" in error for error in errors), errors)
 
 
 if __name__ == "__main__":

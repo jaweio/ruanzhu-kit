@@ -196,12 +196,66 @@ def read_document(path):
             from pypdf import PdfReader
         except ImportError as exc:
             raise RuntimeError("读取 PDF 需要 pypdf；也可以直接把软件说明书.md 作为检测目标。") from exc
-        return "\n".join((page.extract_text() or "") for page in PdfReader(str(path)).pages)
+        page_texts = [(page.extract_text() or "") for page in PdfReader(str(path)).pages]
+        verified_header = verified_pdf_running_header(path)
+        return "\n".join(strip_repeated_pdf_headers(page_texts, verified_header))
     if suffix == ".docx":
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from aigc_rules import split_docx
         return "\n".join(block.text for block in split_docx(path))
     return ""
+
+
+def verified_pdf_running_header(path):
+    """Return a title/version only when its position and pagination agree throughout."""
+    try:
+        import pymupdf
+    except ImportError as exc:
+        raise RuntimeError("核验 PDF 页眉需要 PyMuPDF；请安装 requirements.txt。") from exc
+    labels = []
+    with pymupdf.open(path) as document:
+        if not len(document):
+            return None
+        for number, page in enumerate(document, 1):
+            left, right = [], []
+            for block in page.get_text("dict")["blocks"]:
+                if block["type"] != 0 or block["bbox"][1] >= 48:
+                    continue
+                for line in block["lines"]:
+                    if line["bbox"][1] >= 48:
+                        continue
+                    label = normalized_text("".join(span["text"] for span in line["spans"]))
+                    if label:
+                        (left if line["bbox"][0] < page.rect.width / 2 else right).append(label)
+            if (len(left) != 1 or len(right) != 1 or right[0] != str(number)
+                    or not re.fullmatch(r".+\s+[Vv]\d+(?:\.\d+)*", left[0])):
+                return None
+            labels.append(left[0])
+    return labels[0] if len(set(labels)) == 1 else None
+
+
+def strip_repeated_pdf_headers(page_texts, verified_header=None):
+    """Omit the verified running header, preserving every other extracted line.
+
+    Text alone is insufficient proof: callers must first verify the PDF
+    geometry with ``verified_pdf_running_header``.  If pypdf extraction does
+    not agree on every page, retain the original text rather than drop content.
+    """
+    if not verified_header:
+        return page_texts
+    parts = [page.splitlines() for page in page_texts]
+    offsets = []
+    for number, lines in enumerate(parts, 1):
+        if not lines:
+            return page_texts
+        first = normalized_text(lines[0])
+        if first == f"{verified_header} {number}":
+            offsets.append(1)
+        elif first == verified_header and len(lines) > 1 and normalized_text(lines[1]) == str(number):
+            offsets.append(2)
+        else:
+            return page_texts
+    return ["\n".join(lines[offset:]) for lines, offset in zip(parts, offsets)]
 
 
 def normalized_text(text):

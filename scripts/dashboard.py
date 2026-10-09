@@ -161,8 +161,20 @@ def scan_project(root, cfg, proj, cfg_path, repo):
     return info
 
 
-def build(cfg_path, repo, cfg, *, jev=False, allow_upload=False):
+def _output_root(cfg, cfg_path):
     root = Path(cfg.get("output_root", "soft-copyright-materials"))
+    if root.is_absolute():
+        return root
+    # 相对 output_root 以 config 所在目录或其父目录为基准解析为绝对路径，
+    # 避免材料清单中的绝对路径无法 relative_to 相对 root。
+    for base in (cfg_path.parent, cfg_path.parent.parent):
+        if (base / root).exists():
+            return (base / root).resolve()
+    return root.resolve()
+
+
+def build(cfg_path, repo, cfg, *, jev=False, allow_upload=False):
+    root = _output_root(cfg, cfg_path)
     projects = [scan_project(root, cfg, p, cfg_path, repo) for p in cfg["projects"]]
 
     if jev:
@@ -431,7 +443,7 @@ def main():
 
     cfg_path = Path(args.config)
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    root = Path(cfg.get("output_root", "soft-copyright-materials"))
+    root = _output_root(cfg, cfg_path)
     if args.allow_upload and not args.jev:
         ap.error("--allow-upload 只可与 --jev 一起使用")
     projects, F = build(cfg_path, Path(args.repo).resolve(), cfg, jev=args.jev, allow_upload=args.allow_upload)

@@ -15,15 +15,81 @@ import json
 import re
 import shutil
 import subprocess
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
 from aigc_rules import find_placeholders, pdf_text
 from ai_compliance import FOLDER as AI_FOLDER, RECORD as AI_RECORD, filename as ai_filename, supplemental_status
+from environment_profile import resolve_environment
 from output_names import (endpoint_label, manual_pdf_name,
                           source_material_pdf_name, submission_dir,
                           submission_form_path)
 from source_validation import SourceValidationError, validate_source_pdf
+
+
+ENVIRONMENT_FIELDS = (
+    ("devHardware", "开发硬件环境"),
+    ("runHardware", "运行硬件环境"),
+    ("devOS", "开发操作系统"),
+    ("devTools", "开发工具"),
+    ("runOS", "运行操作系统"),
+    ("runSupport", "运行支撑环境"),
+)
+ENVIRONMENT_CONFIG_KEYS = {
+    "devHardware": "dev_hardware", "runHardware": "run_hardware",
+    "devOS": "dev_os", "devTools": "dev_tools",
+    "runOS": "run_os", "runSupport": "run_support",
+}
+
+
+def _normalized_environment_text(value):
+    return "".join(unicodedata.normalize("NFKC", str(value)).split())
+
+
+def _table_value(markdown, label):
+    match = re.search(rf"(?m)^\|\s*{re.escape(label)}\s*\|\s*([^|]*?)\s*\|", markdown)
+    return match.group(1).strip() if match else None
+
+
+def verify_environment_consistency(project_dir, form_env, manual_pdf, configured_env=None):
+    """Block stale manuals when the six R11 environment fields changed."""
+    if not isinstance(form_env, dict) or not any(form_env.get(key) for key, _ in ENVIRONMENT_FIELDS):
+        return []  # Legacy materials without this form section remain readable.
+    errors = []
+    project_dir = Path(project_dir)
+    text_files = (
+        ("软件说明书.md", project_dir / "软件说明书.md"),
+        ("申请表填报文案.md", project_dir / "申请表填报文案.md"),
+    )
+    markdowns = {}
+    for label, path in text_files:
+        try:
+            markdowns[label] = path.read_text(encoding="utf-8")
+        except OSError:
+            errors.append(f"环境字段核对缺少 {label}")
+    pdf_content = ""
+    if Path(manual_pdf).is_file():
+        try:
+            pdf_content = _normalized_environment_text(pdf_text(manual_pdf))
+        except (Exception, SystemExit) as exc:
+            errors.append(f"环境字段核对无法读取说明书 PDF：{exc}")
+    for key, label in ENVIRONMENT_FIELDS:
+        value = str(form_env.get(key) or "").strip()
+        if not value:
+            errors.append(f"auto-fill/config.json 缺少环境字段：{label}")
+            continue
+        expected = _normalized_environment_text(value)
+        configured = (configured_env or {}).get(ENVIRONMENT_CONFIG_KEYS[key])
+        if configured and _normalized_environment_text(configured) != expected:
+            errors.append(f"auto-fill/config.json 的{label}与 ruanzhu.config.json 不一致")
+        for filename, markdown in markdowns.items():
+            actual = _table_value(markdown, label)
+            if actual is None or _normalized_environment_text(actual) != expected:
+                errors.append(f"{filename} 的{label}与 auto-fill/config.json 不一致")
+        if pdf_content and (_normalized_environment_text(label) not in pdf_content or expected not in pdf_content):
+            errors.append(f"说明书 PDF 的{label}与 auto-fill/config.json 不一致；请重新生成 PDF")
+    return errors
 
 
 def load_material_manifest(path):
@@ -230,7 +296,12 @@ def build_manifest(config_path, cfg, project, root):
     }
     # 源程序页眉（软件全称 + 版本号）供正文校验识别页边距行
     files["programPdf"]["header"] = f"{project.get('name', '')} {project.get('version', 'V1.0')}".strip()
-    checks = verify_records(files, features, manual_pdf, source_pdf)
+    checks = verify_records(files, features, manual_pdf, source_pdf,
+                            manual_identity=(project.get("name", project["id"]),
+                                             project.get("version", "V1.0")))
+    configured_env, _ = resolve_environment(project, cfg=cfg)
+    checks.extend(verify_environment_consistency(project_dir, form.get("step3_dev"), manual_pdf,
+                                                 configured_env))
     zhusque = _zhusque_status(project_dir)
     if not zhusque["checked"] and not zhusque["waived"]:
         checks.append("尚未完成当前正文的朱雀正式检测（必需）；运行 zhusque_check.py finalize。"
@@ -283,7 +354,7 @@ def build_manifest(config_path, cfg, project, root):
     }
 
 
-def verify_records(files, form_features, manual_pdf=None, source_pdf=None):
+def verify_records(files, form_features, manual_pdf=None, source_pdf=None, manual_identity=None):
     errors = []
     for key, record in files.items():
         if not record["exists"]:
@@ -304,6 +375,12 @@ def verify_records(files, form_features, manual_pdf=None, source_pdf=None):
             errors.append(f"docPdf 无法抽取文本，不能确认不含草稿占位符：{exc}")
         if hits:
             errors.append(f"docPdf 含 {len(hits)} 处草稿占位符（如 {hits[0][1]}），不得上传")
+        if manual_identity:
+            from render_pdfs import ManualLayoutError, validate_manual_pdf_layout
+            try:
+                validate_manual_pdf_layout(manual_pdf, *manual_identity)
+            except ManualLayoutError as exc:
+                errors.append(f"docPdf 页眉或正文密度校验失败，不得上传：{exc}")
     if files["programPdf"]["exists"]:
         source_pdf = source_pdf or files["programPdf"].get("path")
         if not source_pdf:

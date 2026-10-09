@@ -141,11 +141,17 @@ def _is_margin_line(line: str, page_number: int, header: str | None) -> bool:
 def _page_text_candidates(text: str, page_number: int, header: str | None = None) -> set[str]:
     """只允许移除首行或末行的页码（可带页眉），保留源码中的数字。"""
     lines = [line for line in text.splitlines() if _compact(line)]
-    candidates = {_comparison_text(text)}
+    variants = (text, text.replace("\u2f1c", "口"))
+    # Chromium/Songti SC occasionally writes the glyph for 口 as the Kangxi
+    # radical U+2F1C in the PDF text map. Admit only that exact PDF codepoint
+    # as an alternate; an ordinary 又 remains a real content mismatch.
+    candidates = {_comparison_text(variant) for variant in variants}
     if lines and _is_margin_line(lines[0], page_number, header):
-        candidates.add(_comparison_text("".join(lines[1:])))
+        body = "".join(lines[1:])
+        candidates.update(_comparison_text(variant) for variant in (body, body.replace("\u2f1c", "口")))
     if lines and _is_margin_line(lines[-1], page_number, header):
-        candidates.add(_comparison_text("".join(lines[:-1])))
+        body = "".join(lines[:-1])
+        candidates.update(_comparison_text(variant) for variant in (body, body.replace("\u2f1c", "口")))
     return candidates
 
 

@@ -91,6 +91,20 @@ class SourceMaterialRenderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source_files"):
             collect_source_material(self.repo, self.project)
 
+    def test_licensed_source_keeps_author_and_requires_license_evidence(self):
+        (self.repo / "src/main.js").write_text(
+            "/* Copyright (c) 2020 upstream\n * @author upstream\n */\n"
+            "const answer = 42;\n", encoding="utf-8")
+        self.project["source_material"]["licensed_source_files"] = ["src/main.js"]
+        self.project["source_material"]["license_evidence"] = "LICENSE"
+        with self.assertRaisesRegex(ValueError, "license_evidence"):
+            collect_source_material(self.repo, self.project)
+        (self.repo / "LICENSE").write_text("MIT License\nCopyright (c) 2020 upstream\n")
+        result = collect_source_material(self.repo, self.project)
+        self.assertFalse(result["skipped"])
+        self.assertTrue(any("Copyright (c) 2020 upstream" in line for line in result["lines"]))
+        self.assertTrue(any("@author upstream" in line for line in result["lines"]))
+
     def test_failed_collection_does_not_replace_existing_html(self):
         output = self.repo / "source.html"
         output.write_text("previous valid output", encoding="utf-8")

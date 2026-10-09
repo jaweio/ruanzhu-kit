@@ -37,8 +37,8 @@
       "title": "软件开发信息",
       "wait_for": "软件开发信息",
       "fields": [
-        {"key": "step3_dev.devHardware", "label": "开发硬件环境", "type": "textarea", "limit": 100},
-        {"key": "step3_dev.runHardware", "label": "运行硬件环境", "type": "textarea", "limit": 100},
+        {"key": "step3_dev.devHardware", "label": "开发硬件环境", "type": "textarea", "limit": 50},
+        {"key": "step3_dev.runHardware", "label": "运行硬件环境", "type": "textarea", "limit": 50},
         {"key": "step3_dev.devOS", "label": "开发操作系统", "type": "textarea", "limit": 50},
         {"key": "step3_dev.devTools", "label": "开发工具", "type": "textarea", "limit": 50,
          "note": "写 IDE/编译器/构建工具，不写 React、Vue 这类技术栈名"},
@@ -47,7 +47,7 @@
         {"key": "step3_dev.language", "label": "编程语言", "type": "choice"},
         {"key": "step3_dev.languageOther", "label": "其他编程语言", "type": "textarea", "limit": 50, "optional": true},
         {"key": "step3_dev.sourceLines", "label": "源程序量", "type": "number", "verify": true,
-         "note": "全项目源码行数，不是 60 页取材行数"}
+         "note": "本次申报软件范围内的原始源程序行数，不是 PDF 裁剪行数"}
       ],
       "next": "下一步"
     },

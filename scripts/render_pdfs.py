@@ -109,23 +109,36 @@ def group_screenshot_figures(html):
     return image_only.sub(r'<figure class="screenshot-figure">\1</figure>', html)
 
 
-def html_doc(title, body, version="", style="reference", chapters=None):
+def html_doc(title, body, version="", style="reference", chapters=None,
+             chapter_page_breaks=None):
     if style not in STYLE_CHOICES:
         raise ValueError(f"未知说明书样式 {style!r}，可选：{', '.join(STYLE_CHOICES)}")
     chapters = chapters or list(CHAPTERS)
+    chapter_page_breaks = set(chapter_page_breaks or [])
+    chapter_break_css = "\n".join(
+        f'#chapter-{index} {{ break-before: page; page-break-before: always; }}'
+        for index, chapter in enumerate(chapters, 1) if chapter in chapter_page_breaks
+    )
+    # Print the software identity once on the left and only the page number on
+    # the right; neither margin box should duplicate the other.
+    def css_string(value):
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+    header = css_string(" ".join(part for part in (title, version) if part))
+    top_left = f'content: "{header}"; font-size: 9pt; color: #555;'
+    top_right = 'content: counter(page); font-size: 10pt; color: #555;'
     if style == "reference":
         links = "\n".join(f'<li><a href="#chapter-{i+1}">{i+1:02d}-{c}</a></li>' for i, c in enumerate(chapters))
-        page_css = """@page { size: A4; margin: 20mm 19mm 17mm;
-  @top-right { content: counter(page); font-size: 10pt; color: #555; }
-}"""
+        page_css = f"""@page {{ size: A4; margin: 20mm 19mm 17mm;
+  @top-left {{ {top_left} }}
+  @top-right {{ {top_right} }}
+}}"""
         cover_css = """.cover { min-height:225mm; page-break-after:always; }
 .cover h1 { font-size:34px; margin:0 0 10mm; padding-bottom:4mm; border-bottom:1px solid #d1d5db; }
 .cover .doc-kind { font-size:22px; color:#555; margin:-5mm 0 10mm; }
 .cover ul { list-style:none; margin:0; padding:0; font-size:18px; line-height:1.55; }
 .cover li { margin:0; padding:1.9mm 0; }
 .cover li a { display:block; color:#1677ff; }"""
-        heading_css = """h1 { page-break-before:always; page-break-after:avoid; break-after:avoid; font-size:30px; margin:0 0 5mm; padding-bottom:4mm; border-bottom:1px solid #d1d5db; color:#262626; }
-h1:first-child { page-break-before:auto; }
+        heading_css = """h1 { page-break-after:avoid; break-after:avoid; font-size:30px; margin:0 0 5mm; padding-bottom:4mm; border-bottom:1px solid #d1d5db; color:#262626; }
 h2 { font-size:22px; margin:7mm 0 3mm; page-break-after:avoid; break-after:avoid; }
 h3 { font-size:18px; margin:5mm 0 2mm; }"""
         body_css = """body { font-family: -apple-system,BlinkMacSystemFont,\"PingFang SC\",\"Microsoft YaHei\",Arial,sans-serif; font-size:16px; line-height:2.0; color:#262626; }
@@ -136,17 +149,17 @@ th,td { border:1px solid #d1d5db; padding:6px 8px; vertical-align:top; }
 th { background:#f7f7f7; }"""
     else:
         links = "\n".join(f'<li><a href="#chapter-{i+1}">{i+1}. {c}</a></li>' for i, c in enumerate(chapters))
-        page_css = """@page { size: A4; margin: 22mm 19mm 18mm;
-  @top-right { content: counter(page); font-size: 10pt; color: #555; }
-}"""
+        page_css = f"""@page {{ size: A4; margin: 22mm 19mm 18mm;
+  @top-left {{ {top_left} }}
+  @top-right {{ {top_right} }}
+}}"""
         cover_css = """.cover { min-height:225mm; page-break-after:always; }
 .cover h1 { font-size:32px; margin:0 0 18mm; padding-bottom:4mm; border-bottom:2px solid #111827; }
 .cover .doc-kind { font-size:21px; color:#4b5563; margin:-10mm 0 16mm; }
 .cover ul { list-style:none; margin:0 14mm; padding:0; font-size:20px; line-height:1.55; }
 .cover li { margin:0; padding:4.2mm 0; border-bottom:1px solid #e5e7eb; }
 .cover li a { display:block; color:#111827; }"""
-        heading_css = """h1 { page-break-before:always; page-break-after:avoid; break-after:avoid; font-size:28px; margin:0 0 8mm; padding-bottom:4mm; border-bottom:2px solid #111827; }
-h1:first-child { page-break-before:auto; }
+        heading_css = """h1 { page-break-after:avoid; break-after:avoid; font-size:28px; margin:0 0 8mm; padding-bottom:4mm; border-bottom:2px solid #111827; }
 h2 { font-size:20px; margin:8mm 0 4mm; page-break-after:avoid; break-after:avoid; }
 h3 { font-size:17px; margin:6mm 0 3mm; }"""
         body_css = """body { font-family: -apple-system,BlinkMacSystemFont,\"PingFang SC\",\"Microsoft YaHei\",Arial,sans-serif; font-size:16px; line-height:2.12; color:#111827; }
@@ -156,12 +169,14 @@ table { width:100%; border-collapse:collapse; margin:6mm 0 8mm; font-size:14px; 
 th,td { border:1px solid #c9ced6; padding:7px 9px; vertical-align:top; }
 th { background:#f3f4f6; }"""
     body = group_screenshot_figures(anchor_h1(body, title, style))
+    cover_kind = "软件说明书" + (f" · {escape(version)}" if version else "")
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>
 <style>
 {page_css}
 {cover_css}
 a {{ color:#111827; text-decoration:none; }}
 {heading_css}
+{chapter_break_css}
 {body_css}
 /* Screenshots are submission evidence, not decorative thumbnails.  Keep the
    full-width image visible in the printed page while preserving its aspect
@@ -170,11 +185,79 @@ figure.screenshot-figure {{ margin: 4mm auto 7mm; text-align: center; break-insi
 figure.screenshot-figure img {{ max-width: 100%; max-height: 145mm; width: auto; height: auto; display: block; margin: 0 auto 2mm; border: 1px solid #d0d7de; }}
 figure.screenshot-figure figcaption {{ font-size: 14px; line-height: 1.5; color: #4b5563; text-align: center; }}
 pre {{ white-space:pre-wrap; word-break:break-word; font-size:12.5px; line-height:1.65; background:#f6f8fa; padding:12px 14px; border:1px solid #d0d7de; }}
-</style></head><body><section class="cover"><h1>{title}</h1><div class="doc-kind">软件说明书</div><ul>{links}</ul></section><main>{body}</main></body></html>"""
+</style></head><body><section class="cover"><h1>{title}</h1><div class="doc-kind">{cover_kind}</div><ul>{links}</ul></section><main>{body}</main></body></html>"""
 
 
 class PlaceholderError(RuntimeError):
     """说明书仍含草稿占位符，不能生成提交件。"""
+
+
+class ManualLayoutError(RuntimeError):
+    """说明书 PDF 页眉或非末页正文密度不符合提交规则。"""
+
+
+def validate_manual_pdf_layout(pdf, title, version=""):
+    """Check every running header and require half a page of content except last.
+
+    The measurement is the vertical span of real text/image content within the
+    printable body, excluding the top margin header.  It catches sparse pages
+    caused by forced chapter breaks without counting the header as body text.
+    """
+    try:
+        import pymupdf
+    except ImportError as exc:
+        raise ManualLayoutError("缺少 PyMuPDF，无法校验说明书每页内容；请安装 requirements.txt。") from exc
+    expected = " ".join(part for part in (title, version) if part)
+    try:
+        document = pymupdf.open(pdf)
+    except Exception as exc:
+        raise ManualLayoutError(f"说明书 PDF 无法读取：{exc}") from exc
+    try:
+        if not len(document):
+            raise ManualLayoutError("说明书 PDF 没有页面。")
+        minimum_fill = None
+        for index, page in enumerate(document):
+            height = page.rect.height
+            header_lines = []
+            for block in page.get_text("dict")["blocks"]:
+                if block["type"] != 0 or block["bbox"][1] >= 48:
+                    continue
+                for line in block["lines"]:
+                    if line["bbox"][1] < 48:
+                        label = " ".join("".join(span["text"] for span in line["spans"]).split())
+                        header_lines.append((line["bbox"][0], label))
+            left_labels = [label for x, label in header_lines if x < page.rect.width / 2]
+            right_labels = [label for x, label in header_lines if x >= page.rect.width / 2]
+            if left_labels != [expected]:
+                raise ManualLayoutError(f"说明书第 {index + 1} 页左上角缺少软件全称或版本。")
+            if right_labels != [str(index + 1)]:
+                raise ManualLayoutError(f"说明书第 {index + 1} 页右上角缺少纯数字页码。")
+            boxes = []
+            for block in page.get_text("dict")["blocks"]:
+                if block["type"] == 1:
+                    boxes.append(block["bbox"])
+                elif block["type"] == 0:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            if span["text"].strip() and span["bbox"][1] >= 48:
+                                boxes.append(span["bbox"])
+            if not boxes:
+                raise ManualLayoutError(f"说明书第 {index + 1} 页没有正文或图片。")
+            top = min(box[1] for box in boxes)
+            bottom = max(box[3] for box in boxes)
+            fill = (bottom - top) / (height - 100)
+            if index < len(document) - 1:
+                minimum_fill = fill if minimum_fill is None else min(minimum_fill, fill)
+                if fill < 0.5:
+                    raise ManualLayoutError(
+                        f"说明书第 {index + 1} 页正文只达到可用高度的 {fill:.1%}，少于半页；"
+                        "请调整章节分页或不可拆分内容。")
+            elif fill < 0.2:
+                raise ManualLayoutError(
+                    f"说明书末页仅占可用高度的 {fill:.1%}，形成孤页；请调整分页或压缩前文排版。")
+        return {"pages": len(document), "min_fill": minimum_fill}
+    finally:
+        document.close()
 
 
 def placeholder_gate(md_path, md):
@@ -206,9 +289,20 @@ def render_software_pdf(root, project, style, config=None):
     chapters = chapter_titles(md)
     body = md_to_html(strip_toc(md))
     html = d / manual_html_name(project)
-    html.write_text(html_doc(project["name"], body, project.get("version", "V1.0"), style, chapters), encoding="utf-8")
-    run([CHROME, "--headless", "--disable-gpu", "--no-pdf-header-footer", f"--print-to-pdf={pdf}", html.resolve().as_uri()])
-    actual_pages = pages(pdf)
+    html.write_text(html_doc(project["name"], body, project.get("version", "V1.0"), style,
+                             chapters, project.get("chapter_page_breaks")), encoding="utf-8")
+    if not CHROME:
+        raise ManualLayoutError("未找到 Chrome/Chromium，无法生成说明书 PDF。")
+    with tempfile.TemporaryDirectory(prefix=".manual-render-", dir=final_dir) as temp:
+        candidate = Path(temp) / "manual.pdf"
+        try:
+            run([CHROME, "--headless", "--disable-gpu", "--no-pdf-header-footer",
+                 f"--print-to-pdf={candidate}", html.resolve().as_uri()])
+        except subprocess.CalledProcessError as exc:
+            raise ManualLayoutError(f"Chrome 未能打印说明书 PDF：{exc}") from exc
+        checked = validate_manual_pdf_layout(candidate, project["name"], project.get("version", "V1.0"))
+        actual_pages = checked["pages"]
+        candidate.replace(pdf)
     low, high, target = manual_page_window(project, config)
     if actual_pages is not None and not low <= actual_pages <= high:
         print(
@@ -346,7 +440,7 @@ def main():
             raise SystemExit(f"document_style 必须是 {', '.join(STYLE_CHOICES)} 之一，当前为 {style!r}")
         try:
             render_software_pdf(root, project, style, cfg)
-        except PlaceholderError as exc:
+        except (PlaceholderError, ManualLayoutError) as exc:
             failed.append(project["id"])
             print(f"[{project['name']}] {exc}", file=sys.stderr)
         try:

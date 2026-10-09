@@ -80,7 +80,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-说明书 PDF 和源程序 PDF：Pandoc/源码 HTML + Chrome/Chromium。源程序 DOCX 仍由 Python `python-docx` 生成，作为可编辑稿，不再作为 PDF 转换中间文件；不要求安装 LibreOffice、WPS 或 Microsoft Word。`pypdf` 用于 PDF 文本和页数回读，页数检查建议同时安装 Poppler（pdfinfo），没有时工具会使用 PDF 对象回退统计。Chrome/Chromium 优先读取 `RUANZHU_CHROME`，截图还需对应平台的工具和权限，详见 SKILL.md。
+说明书 PDF 和源程序 PDF：Pandoc/源码 HTML + Chrome/Chromium。源程序 DOCX 仍由 Python `python-docx` 生成，作为可编辑稿，不再作为 PDF 转换中间文件；不要求安装 LibreOffice、WPS 或 Microsoft Word。`pypdf` 用于 PDF 文本和页数回读，PyMuPDF 用于说明书逐页页眉与半页正文密度校验；页数检查建议同时安装 Poppler（pdfinfo），没有时工具会使用 PDF 对象回退统计。Chrome/Chromium 优先读取 `RUANZHU_CHROME`，截图还需对应平台的工具和权限，详见 SKILL.md。
 
 纸面材料照片转 A4 PDF 使用 Pillow + ReportLab，包含在 `requirements.txt`。处理默认保留照片颜色，只做纸张范围和透视校正；白底增强必须显式选择 `--whiten-background`。
 
@@ -170,7 +170,7 @@ python3 <skill目录>/scripts/zhusque_check.py finalize <材料目录> \
 python3 <skill目录>/scripts/zhusque_check.py bind --open
 ```
 
-首轮为当前全部正文建立检测覆盖；按段落和邻近上下文分块，目标约 700 字符，默认上限 2,000 字符。后续复用相同块，只检测新增、改动块及分段边界变化影响的相邻上下文。`--channel auto` 优先调用腾讯官方 `zhuque-text` API，无 Key 或 API 失败时回退[朱雀官网](https://matrix.tencent.com/ai-detect/)；`api` / `web` 可固定渠道，`--no-cache` 强制重测。一次明确授权覆盖本轮 API/网页检测及改写后复核，已有授权时不逐块询问，CLI 仍需 `--allow-upload`。
+首轮为当前全部正文建立检测覆盖；按段落和邻近上下文分块，目标约 700 字符，默认上限 2,000 字符。后续复用相同块，只检测新增、改动块及分段边界变化影响的相邻上下文。读取说明书 PDF 时，仅在逐页核对左上角的软件全称与版本、右上角的连续纯数字页码及 PDF 提取文本全部一致后排除重复页眉；任一页不符就保留原文，封面标题、目录和正文始终参与检测。`--channel auto` 优先调用腾讯官方 `zhuque-text` API，无 Key 或 API 失败时回退[朱雀官网](https://matrix.tencent.com/ai-detect/)；`api` / `web` 可固定渠道，`--no-cache` 强制重测。一次明确授权覆盖本轮 API/网页检测及改写后复核，已有授权时不逐块询问，CLI 仍需 `--allow-upload`。
 
 报告是**当前全文覆盖的历史有效结果与本轮新结果按字符量加权汇总**，不是本轮单次全文检测。报告记录来源、缓存命中、本轮请求和 API 返回的 Makers 用量；网页检测不产生 API Token 记录。覆盖未完成或 AI＋疑似比例高于默认 0.20 时，不记为通过；0.20 是项目规则，不是官方审核标准。
 

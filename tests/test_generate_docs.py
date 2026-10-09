@@ -10,6 +10,19 @@ import aigc_rewrite
 
 
 class GenerateDocsTests(unittest.TestCase):
+    def test_application_copy_uses_declared_source_file_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            source = repo / "src" / "Main.java"
+            source.parent.mkdir()
+            source.write_text("one\ntwo\nthree\n", encoding="utf-8")
+            spec = {"repo": str(repo), "stats": {"source_lines": 1, "source_files": 1}}
+            project = {"name": "示例", "source_count_mode": "source_files",
+                       "source_files": ["src/Main.java"]}
+            copy = generate_docs.application_copy(project, {}, spec)
+            self.assertIn("3 行（1 个源文件，按本次申报清单逐文件统计）", copy)
+            self.assertNotIn("1 行（1 个源文件，manual_spec.py 统计）", copy)
+
     def test_default_chapters_can_be_extended(self):
         project = {
             "id": "01-复杂系统",
@@ -88,6 +101,19 @@ class GenerateDocsTests(unittest.TestCase):
         }, {}, shots={"核心功能": [{"no": "01", "title": "首页", "file": "截图/01-首页.png"}]})
         self.assertIn("![01 首页](截图/01-首页.png)", text)
 
+    def test_manual_safe_keeps_loopback_api_url(self):
+        original = "GET http://127.0.0.1:18080/ai/coding/capabilities"
+        self.assertEqual(generate_docs.manual_safe(original), original)
+
+    def test_manual_safe_preserves_marked_virtual_path_only(self):
+        text = "path={{virtual-path:src/Order.java}}；内部文件 src/main/Secret.java"
+        rendered = generate_docs.manual_safe(text)
+        self.assertIn("path=src/Order.java", rendered)
+        self.assertNotIn("src/main/Secret.java", rendered)
+        self.assertIn("对应业务模块", rendered)
+        with self.assertRaises(ValueError):
+            generate_docs.manual_safe("{{virtual-path:src/../secret}}")
+
     def test_module_keeps_all_real_screenshots(self):
         text = generate_docs.manual({
             "id": "p", "name": "P",
@@ -143,6 +169,76 @@ class GenerateDocsTests(unittest.TestCase):
         self.assertIn("| title | string | 标题 |", text)
         self.assertIn("| 201 | 创建成功 |", text)
         self.assertNotIn("对应业务模块", text)
+
+    def test_compact_api_appendix_keeps_shared_rules_once(self):
+        common = [["200", "分析完成"], ["400", "参数不合法"]]
+        text = generate_docs.rest_api_section({
+            "api_reference_style": "compact",
+            "api_common_auth": "本机或持有 token",
+            "api_common_status": common,
+            "api_shared_rules": "本节统一要求本机或持有 token；输入错误为 400。",
+            "api_examples": [
+                {"method": "POST", "path": "/api/check", "title": "检查输入",
+                 "scenario": "提交 text 后核对位置。", "auth": "本机或持有 token",
+                 "request_fields": [["text", "文本", "不超过 20 字"]],
+                 "response_fields": [["findings", "数组", "命中位置"]],
+                 "status_codes": common, "notes": "不返回原文。"},
+                {"method": "GET", "path": "/api/status", "title": "查询状态",
+                 "auth": "本机或持有 token", "response_fields": [["ready", "布尔", "是否就绪"]],
+                 "status_codes": [["503", "尚未就绪"]]},
+            ],
+        })
+        self.assertIn("提交 text 后核对位置。", text)
+        self.assertIn("| 请求 | text | 文本 | 不超过 20 字 |", text)
+        self.assertEqual(text.count("本机或持有 token"), 1)
+        self.assertNotIn("| 200 | 分析完成 |", text)
+        self.assertIn("| 503 | 尚未就绪 |", text)
+
+    def test_curated_module_chapter_replaces_repeated_overview(self):
+        text = generate_docs.manual({
+            "id": "p", "name": "P", "modules": [["扫描", "读取输入"]],
+            "module_overview": "先检查文件清单，再查看结果。",
+            "module_manual": "## 7.2 扫描\n\n提交文件后读取计数，空清单会被拒绝。",
+        }, {})
+        self.assertIn("## 7.1 模块一览\n先检查文件清单", text)
+        self.assertIn("## 7.2 扫描", text)
+        self.assertNotIn("| 扫描 | 读取输入 |\n\n## 7.2", text)
+
+    def test_curated_feature_and_operation_prose_replaces_tables(self):
+        text = generate_docs.manual({
+            "id": "p", "name": "P", "document_kind": "backend",
+            "modules": [["扫描", "读取输入"]],
+            "operations": [["扫描", "提交文件", "返回计数"]],
+            "core_features_text": "先提交虚拟文件，再按返回的摘要核对输入。",
+            "operations_text": "核对时先保存摘要；内容变更后，摘要随之变化。",
+        }, {})
+        self.assertIn("先提交虚拟文件，再按返回的摘要核对输入。", text)
+        self.assertIn("核对时先保存摘要；内容变更后，摘要随之变化。", text)
+        self.assertNotIn("| 扫描 | 读取输入 |", text.split("## 1.4 核心特性", 1)[1].split("## 1.5", 1)[0])
+        self.assertNotIn("| 扫描 | 提交文件 | 返回计数 |", text)
+
+    def test_can_omit_redundant_feature_and_quick_start_sections(self):
+        text = generate_docs.drop_empty_sections(generate_docs.manual({
+            "id": "p", "name": "P", "document_kind": "backend",
+            "modules": [["扫描", "读取输入"]],
+            "quick_start": ["提交输入"],
+            "operations_text": "提交输入后核对摘要。",
+            "omit_core_features": True,
+            "omit_quick_start": True,
+        }, {}))
+        self.assertNotIn("核心特性", text)
+        self.assertNotIn("快速上手", text)
+        self.assertIn("提交输入后核对摘要。", text)
+
+    def test_architecture_prose_can_replace_class_inventory_table(self):
+        text = generate_docs.manual({
+            "id": "p", "name": "P", "document_kind": "backend",
+            "architecture_layers": [["接入", "处理请求"]],
+            "architecture_layers_text": "请求先经过权限检查，再交给只读分析服务。",
+        }, {})
+        section = text.split("## 2.2 分层架构", 1)[1].split("## 2.3", 1)[0]
+        self.assertIn("请求先经过权限检查", section)
+        self.assertNotIn("| 接入 | 处理请求 |", section)
 
     def test_aigc_cleanup_keeps_following_extended_chapter(self):
         text = (

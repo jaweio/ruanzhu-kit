@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.request import Request
 
+import pymupdf
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import zhusque_check
 
@@ -64,6 +66,60 @@ class ZhusqueCheckTests(unittest.TestCase):
         first = zhusque_check.text_fingerprint("功能一\n\n功能二")
         second = zhusque_check.text_fingerprint("功能一  功能二")
         self.assertEqual(first, second)
+
+    def test_pdf_detection_omits_only_verified_running_headers(self):
+        pages = [
+            "软件全称 V1.0 1\n软件全称\n软件说明书 · V1.0\n正文一",
+            "软件全称 V1.0 2\n正文二",
+        ]
+        self.assertEqual(zhusque_check.strip_repeated_pdf_headers(pages), pages)
+        self.assertEqual(
+            zhusque_check.strip_repeated_pdf_headers(pages, "软件全称 V1.0"),
+            ["软件全称\n软件说明书 · V1.0\n正文一", "正文二"],
+        )
+        self.assertEqual(
+            zhusque_check.strip_repeated_pdf_headers([pages[0], "别的软件 V1.0 2\n正文二"], "软件全称 V1.0"),
+            [pages[0], "别的软件 V1.0 2\n正文二"],
+        )
+        self.assertEqual(
+            zhusque_check.strip_repeated_pdf_headers([pages[0], "软件全称 V1.0 3\n正文二"], "软件全称 V1.0"),
+            [pages[0], "软件全称 V1.0 3\n正文二"],
+        )
+        split_lines = ["软件全称 V1.0\n1\n正文一", "软件全称 V1.0\n2\n正文二"]
+        self.assertEqual(
+            zhusque_check.strip_repeated_pdf_headers(split_lines, "软件全称 V1.0"),
+            ["正文一", "正文二"],
+        )
+
+    def test_pdf_header_requires_real_margin_position_and_consistent_pages(self):
+        def make_pdf(path, second_page_number_x=530, second_page_title="Example V1.0"):
+            document = pymupdf.open()
+            for number in (1, 2):
+                page = document.new_page()
+                page.insert_text((60, 30), second_page_title if number == 2 else "Example V1.0", fontsize=9)
+                page.insert_text((second_page_number_x if number == 2 else 530, 30), str(number), fontsize=9)
+                page.insert_text((60, 80), f"Body page {number}", fontsize=12)
+            document.save(path)
+            document.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            pdf = Path(directory) / "manual.pdf"
+            make_pdf(pdf)
+            self.assertEqual(zhusque_check.verified_pdf_running_header(pdf), "Example V1.0")
+            text = zhusque_check.read_document(pdf)
+            self.assertIn("Body page 1", text)
+            self.assertIn("Body page 2", text)
+            self.assertNotIn("Example V1.0", text)
+
+            pdf.unlink()
+            make_pdf(pdf, second_page_number_x=180)
+            self.assertIsNone(zhusque_check.verified_pdf_running_header(pdf))
+            self.assertIn("Example V1.0", zhusque_check.read_document(pdf))
+
+            pdf.unlink()
+            make_pdf(pdf, second_page_title="Different V1.0")
+            self.assertIsNone(zhusque_check.verified_pdf_running_header(pdf))
+            self.assertIn("Different V1.0", zhusque_check.read_document(pdf))
 
     def test_cache_round_trip_does_not_store_source_text(self):
         with tempfile.TemporaryDirectory() as directory:
