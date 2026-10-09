@@ -19,6 +19,7 @@ def build(root=ROOT):
     for folder in ['scripts', 'references', 'assets', 'tests']:
         entries.extend(p for p in (root / folder).rglob('*') if p.is_file()
                        and '__pycache__' not in p.parts and 'node_modules' not in p.parts
+                       and 'aigc-calibration' not in p.relative_to(root).parts
                        and (p.suffix in {'.py', '.js', '.json', '.md'}
                             or p == root / 'assets' / 'ai-compliance-template.docx')
                        and p.name != 'config.json')

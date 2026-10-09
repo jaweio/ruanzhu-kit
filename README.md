@@ -221,7 +221,8 @@ python3 <skill目录>/scripts/dashboard.py \
 ```bash
 python3 -m unittest discover -s tests -v
 python3 scripts/oss_selftest.py
-python3 scripts/aigc_calibrate.py
+# 持有本机私有校准样本时才运行；空库会明确报“未进行准确率评估”
+python3 scripts/aigc_calibrate.py --library <私有校准库目录>
 python3 scripts/preflight.py --strict
 python3 scripts/package_release.py
 ```

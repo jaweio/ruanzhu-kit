@@ -13,13 +13,13 @@
 | `scripts/aigc_check.py` | 逐块打分、按章节汇总、列高风险段落和原因 | 不改 |
 | `scripts/aigc_rewrite.py` | 机械清理 + 生成《AIGC改写任务单.md》 | 仅 `--apply` 时改，自动留 `.bak` |
 | `scripts/aigc_rules.py` | 两者共用的规则库（黑名单、营销词、事实锚点正则等） | — |
-| `scripts/aigc_calibrate.py` | 用朱雀真实结果校准：回归自测 / 导入新报告 | 只写 `assets/aigc-calibration/` |
+| `scripts/aigc_calibrate.py` | 用经授权的外部结果校准：回归自测 / 导入新报告 | 只写本机私有样本库，默认 `~/.ruanzhu-kit/aigc-calibration/` |
 
 全部是 Python 标准库，离线运行，不上传任何内容。
 
 单文件可直接传 `.md` `.txt` `.docx` `.pdf`（PDF 需 pypdf 或 pdftotext，会做 NFKC 归一化）。扫描范围（传目录时）：各份软著目录下的 `*.md`（跳过 `源程序提取/`、`说明书章节/`、`源码材料清单.md`、报告本身），`auto-fill/config.json` 里 ≥30 字的字段（主要是 `mainFunction`），以及没有同名 `.md` 的 `.docx`。
 
-## 2. 打分口径（2026-09 按朱雀样本校准）
+## 2. 打分口径（启发式规则）
 
 每块 0–100，越高越像模板化 AI 文；文件分 = 按字数加权平均（代码块权重 0.3，标题和目录不计）。另按块分档统计**人工 / 疑似 / AI 字数占比**，口径同朱雀报告（占比不是“作者用 AI 的概率”）。
 
@@ -36,26 +36,26 @@
 | 35–55 | 中 | 按任务单改掉 ≥35 分的块 |
 | ≥ 55 | 高，模板化明显 | 该章节按“（一）功能说明 /（二）操作步骤 /（三）异常处理”重写 |
 
-**当前校准结果**（`python3 scripts/aigc_calibrate.py`）：24 段样本，二分类准确率 88%，Spearman +0.38。人工样本只有 3 段，两段表格为主的人工样本被判“疑似”，属已知偏差。
+安装包不附带校准原文或标签。没有本机私有样本时，`aigc_calibrate.py` 会报“未进行准确率评估”；不能引用旧样本的历史准确率作为当前版本的验证结果。
 
 **局限**：这是规则启发式，不做语言模型困惑度计算。它能较好区分“概述腔 / 排比腔”和“操作手册腔”，但分不出 0.8 和 0.99 的差别，对纯表格段基本靠猜。最终以外部检测为准。
 
-### 校准数据得出的三条结论
+### 写作检查的三条经验
 
-1. 操作步骤体（祈使句 + 控件名 + 取值约束 + 失败分支）是唯一稳定判人工的写法。
-2. 事实密度与朱雀结果几乎不相关——事实多但用“**X**：…（补注）；”排比写，照样 0.99。
-3. 表格不稳定，FAQ 模板稳定判 AI。
+1. 操作步骤应写清控件名、取值约束与失败分支，并以实际界面或接口核对。
+2. 事实多不代表写法自然；“**X**：…（补注）；”式排比仍需改成可执行的叙述。
+3. 表格和 FAQ 模板可能产生较高疑似分，需结合外部结果复核，不能仅凭本地规则判断作者来源。
 
 ### 维护校准库
 
 ```bash
 S=<skill目录>/scripts
-python3 $S/aigc_calibrate.py                          # 改 aigc_rules / aigc_check 后必跑，准确率不应下降
-python3 $S/aigc_calibrate.py --import-report 朱雀报告.pdf --note "项目X-第3批"
-python3 $S/aigc_calibrate.py --add 原文.txt --ratio 0.1555 --note "项目X-操作章节(人工)"
+python3 $S/aigc_calibrate.py --import-report 朱雀报告.pdf --note "已脱敏报告"
+python3 $S/aigc_calibrate.py --add 原文.txt --ratio 0.1555 --note "已脱敏人工样本"
+python3 $S/aigc_calibrate.py --min-acc 0.75          # 私有库有样本时回归；空库直接报错
 ```
 
-朱雀只对判 AI 的批次提供可导出的分段报告；判人工的批次通常只有页面上的一个 ratio，用 `--add` 手工录入。人工样本越多，校准越可靠。导入前先脱敏（产品名、人名、地址）。
+样本默认保存在 `~/.ruanzhu-kit/aigc-calibration/`，可用 `--library` 或 `RUANZHU_AIGC_CALIBRATION_DIR` 指定其他本机目录。库不随 Git 仓库或安装包分发。导入前先脱敏（产品名、人名、地址），并核对外部报告的实际分段与比例。
 
 ## 3. 闭环流程
 
